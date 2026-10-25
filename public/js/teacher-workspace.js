@@ -913,48 +913,301 @@ function marksPage() {
   `;
 }
 
-function sessionForm(prefix, attendance = false) {
+function sessionForm(prefix) {
   return `
     <form data-kind="lesson">
       <div class="${prefix}-picker-grid form-grid">
         ${input(
           "Date",
           "lesson_date",
-          attendance ? selectedDate : state.today,
+          selectedDate || state.today,
           "date",
-          `required ${
-            attendance ? 'max="' + state.today + '"' : ""
-          }`
+          "required"
         )}
 
         ${input(
-          "Start time", "start_time", "", "time", "required"
+          "Start time",
+          "start_time",
+          "",
+          "time",
+          "required"
         )}
 
         ${input(
-          "End time", "end_time", "", "time", "required"
+          "End time",
+          "end_time",
+          "",
+          "time",
+          "required"
         )}
 
         ${input(
-          "Room", "room", "", "text", 'maxlength="100"'
+          "Room",
+          "room",
+          "",
+          "text",
+          'maxlength="100"'
         )}
 
         ${input(
-          "Topic", "topic", "", "text", 'maxlength="200"'
+          "Topic",
+          "topic",
+          "",
+          "text",
+          'maxlength="200"'
         )}
       </div>
 
       <button type="submit" class="${prefix}-button">
-        ${attendance
-          ? "Create session & open attendance"
-          : "Schedule class session"} →
+        Schedule class session →
       </button>
     </form>
   `;
 }
 
+function attendanceReport(data, classId, now = new Date()) {
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(now);
+
+  const accounts = new Map(
+    data.students.map(student => [
+      student.id,
+      student
+    ])
+  );
+
+  const enrolments = new Map(
+    data.enrolments
+      .filter(record =>
+        record.class_id === classId &&
+        record.active !== false
+      )
+      .map(record => [
+        record.student_id,
+        record
+      ])
+  );
+
+  const lessons = data.lessons
+    .filter(lesson => lesson.class_id === classId)
+    .sort((a, b) =>
+      b.lesson_date.localeCompare(a.lesson_date) ||
+      b.start_time.localeCompare(a.start_time)
+    );
+
+  const lessonIds = new Set(
+    lessons.map(lesson => lesson.id)
+  );
+
+  const saved = new Map();
+
+  for (const record of data.attendance) {
+    if (
+      record.class_id !== classId ||
+      !lessonIds.has(record.lesson_id)
+    ) {
+      continue;
+    }
+
+    if (!saved.has(record.lesson_id)) {
+      saved.set(record.lesson_id, new Map());
+    }
+
+    saved
+      .get(record.lesson_id)
+      .set(record.student_id, record);
+  }
+
+  const activeStudents = [...enrolments.keys()]
+    .map(uid => accounts.get(uid))
+    .filter(student => student?.active === true);
+
+  function studentsOn(date) {
+    return activeStudents.filter(student =>
+      (
+        enrolments.get(student.id).joined_on ||
+        "0000-01-01"
+      ) <= date
+    );
+  }
+
+  function forLesson(lesson) {
+    const records = saved.get(lesson.id) || new Map();
+
+    const eligible = new Set(
+      studentsOn(lesson.lesson_date)
+        .map(student => student.id)
+    );
+
+    const ids = new Set([
+      ...eligible,
+      ...records.keys()
+    ]);
+
+    const counts = {
+      Present: 0,
+      Absent: 0,
+      Late: 0,
+      Excused: 0,
+      "Not marked": 0
+    };
+
+    const students = [...ids]
+      .map(uid => {
+        const account = accounts.get(uid);
+        const record = records.get(uid);
+
+        const status = Object.hasOwn(
+          counts,
+          record?.status
+        )
+          ? record.status
+          : "Not marked";
+
+        counts[status]++;
+
+        return {
+          ...(
+            account || {
+              name: "Previous enrolment",
+              student_no: "—"
+            }
+          ),
+          id: uid,
+          status,
+          can_mark: eligible.has(uid)
+        };
+      })
+      .sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+
+    return {
+      students,
+      counts,
+      total: students.length
+    };
+  }
+
+  function ended(lesson) {
+    return (
+      lesson.lesson_date < data.today ||
+      (
+        lesson.lesson_date === data.today &&
+        lesson.end_time <= clock
+      )
+    );
+  }
+
+  function stage(lesson) {
+    if (ended(lesson)) {
+      return "Completed";
+    }
+
+    if (
+      lesson.lesson_date === data.today &&
+      lesson.start_time <= clock
+    ) {
+      return "In progress";
+    }
+
+    return "Upcoming";
+  }
+
+  return {
+    lessons,
+    held: lessons.filter(ended),
+    activeStudents,
+    studentsOn,
+    forLesson,
+    stage
+  };
+}
+
+function classSessionCards(classroom, lessons, report) {
+  return lessons.map(lesson => {
+    const summary = report.forLesson(lesson);
+
+    const marked =
+      summary.total -
+      summary.counts["Not marked"];
+
+    const progress = marked === 0
+      ? "Attendance not marked"
+      : summary.counts["Not marked"] > 0
+        ? `Attendance partial · ${marked}/${summary.total}`
+        : `Attendance saved · ${marked}/${summary.total}`;
+
+    return `
+      <a
+        class="tc-session"
+        href="${h(url(
+          "attendance",
+          classroom.id,
+          lesson.id,
+          lesson.lesson_date
+        ))}"
+      >
+        <span class="tc-date-tile">
+          <strong>
+            ${h(lesson.lesson_date.slice(8))}
+          </strong>
+
+          <small>
+            ${h(lesson.lesson_date.slice(0, 7))}
+          </small>
+        </span>
+
+        <span class="tc-session-info">
+          <strong>
+            ${h(classroom.name)}
+          </strong>
+
+          <small>
+            ${h(lesson.lesson_date)}
+            · ${h(lesson.start_time)}–${h(lesson.end_time)}
+            · ${h(lesson.room || "Room not set")}
+          </small>
+
+          ${
+            lesson.topic
+              ? `<small>${h(lesson.topic)}</small>`
+              : ""
+          }
+
+          <span class="tc-session-badges">
+            <span class="tc-session-stage">
+              ${h(report.stage(lesson))}
+            </span>
+
+            <span class="tc-session-progress">
+              ${h(progress)}
+            </span>
+          </span>
+        </span>
+
+        <span class="tc-attendance-link">
+          Take attendance →
+        </span>
+      </a>
+    `;
+  }).join("") || `
+    <p class="empty">
+      No sessions scheduled.
+    </p>
+  `;
+}
+
 function classesPage() {
   const classroom = selected();
+
+  const report = classroom
+    ? attendanceReport(state, cid)
+    : null;
 
   return `
     <div class="tc-page">
@@ -978,32 +1231,46 @@ function classesPage() {
               ])}"
             >
               <div class="tc-card-top">
-                <span class="tc-code">${h(item.code)}</span>
+                <span class="tc-code">
+                  ${h(item.code)}
+                </span>
               </div>
 
               <h3>${h(item.name)}</h3>
-              <p class="tc-semester">${h(item.semester)}</p>
+
+              <p class="tc-semester">
+                ${h(item.semester)}
+              </p>
 
               <div class="tc-routine">
-                ${(item.weekly_slots || []).map(slot => `
-                  <div class="tc-routine-line">
-                    ◷ ${h(days[slot.day])}
-                    ${h(slot.start)}–${h(slot.end)}
-                    ${h(slot.room)}
-                  </div>
-                `).join("") ||
-                  "<p>Weekly time not set.</p>"}
+                ${(item.weekly_slots || [])
+                  .map(slot => `
+                    <div class="tc-routine-line">
+                      ◷ ${h(days[slot.day])}
+                      ${h(slot.start)}–${h(slot.end)}
+                      ${h(slot.room)}
+                    </div>
+                  `)
+                  .join("") || `
+                    <p>Weekly time not set.</p>
+                  `}
               </div>
 
               <a
                 class="tc-open-class"
-                href="${h(url("classes", item.id))}"
+                href="${h(url(
+                  "classes",
+                  item.id
+                ))}"
               >
                 Open class →
               </a>
             </article>
-          `).join("") ||
-            '<p class="empty">No classes assigned yet.</p>'}
+          `).join("") || `
+            <p class="empty">
+              No classes assigned yet.
+            </p>
+          `}
         </div>
       </section>
 
@@ -1011,57 +1278,49 @@ function classesPage() {
 
       ${classroom ? `
         <section class="tc-panel panel">
+          <h2>Today's and upcoming sessions</h2>
+
+          <div class="tc-session-list">
+            ${classSessionCards(
+              classroom,
+              report.lessons
+                .filter(lesson =>
+                  lesson.lesson_date >= state.today
+                )
+                .sort((a, b) =>
+                  a.lesson_date.localeCompare(
+                    b.lesson_date
+                  ) ||
+                  a.start_time.localeCompare(
+                    b.start_time
+                  )
+                ),
+              report
+            )}
+          </div>
+        </section>
+
+        <section class="tc-panel panel">
           <h2>Schedule a class session</h2>
+
           ${sessionForm("tc")}
         </section>
 
         <section class="tc-panel panel">
-          <h2>Scheduled sessions</h2>
+          <h2>Session history</h2>
+
+          <p class="tc-session-note">
+            Earlier dates, with saved attendance status.
+          </p>
 
           <div class="tc-session-list">
-            ${state.lessons
-              .filter(lesson => lesson.class_id === cid)
-              .sort((a, b) =>
-                b.lesson_date.localeCompare(a.lesson_date) ||
-                a.start_time.localeCompare(b.start_time)
-              )
-              .map(lesson => `
-                <a
-                  class="tc-session"
-                  href="${h(url(
-                    "attendance",
-                    cid,
-                    lesson.id,
-                    lesson.lesson_date
-                  ))}"
-                >
-                  <span class="tc-date-tile">
-                    <strong>
-                      ${h(lesson.lesson_date.slice(8))}
-                    </strong>
-                    <small>
-                      ${h(lesson.lesson_date.slice(0, 7))}
-                    </small>
-                  </span>
-
-                  <span class="tc-session-info">
-                    <strong>${h(classroom.name)}</strong>
-
-                    <small>
-                      ${h(lesson.lesson_date)}
-                      · ${h(lesson.start_time)}–${h(lesson.end_time)}
-                      · ${h(lesson.room || "Room not set")}
-                    </small>
-
-                    <small>${h(lesson.topic)}</small>
-                  </span>
-
-                  <span class="tc-attendance-link">
-                    Attendance →
-                  </span>
-                </a>
-              `).join("") ||
-              '<p class="empty">No sessions scheduled.</p>'}
+            ${classSessionCards(
+              classroom,
+              report.lessons.filter(lesson =>
+                lesson.lesson_date < state.today
+              ),
+              report
+            )}
           </div>
         </section>
       ` : ""}
@@ -1071,179 +1330,448 @@ function classesPage() {
 
 function attendancePage() {
   const classroom = selected();
+  const report = attendanceReport(state, cid);
 
-  const lessons = state.lessons.filter(lesson =>
-    lesson.class_id === cid &&
-    lesson.lesson_date === selectedDate
-  );
+  const lessons = report.lessons
+    .filter(lesson =>
+      lesson.lesson_date === selectedDate
+    )
+    .sort((a, b) =>
+      a.start_time.localeCompare(b.start_time)
+    );
 
   if (!lessons.some(lesson => lesson.id === lid)) {
-    lid = lessons.length === 1 ? lessons[0].id : "";
+    lid = lessons.length === 1
+      ? lessons[0].id
+      : "";
   }
 
-  const canSave = !!lid && selectedDate <= state.today;
-
-  const students = roster().filter(student =>
-    student.active &&
-    state.enrolments.some(record =>
-      record.class_id === cid &&
-      record.student_id === student.id &&
-      record.joined_on <= selectedDate
-    )
+  const lesson = lessons.find(item =>
+    item.id === lid
   );
+
+  const summary = lesson
+    ? report.forLesson(lesson)
+    : null;
+
+  const canSave =
+    !!lesson &&
+    selectedDate <= state.today;
+
+  const students = summary?.students || [];
 
   return `
     <div class="ta-page">
       ${heading(
         "ta",
         "Student Attendance",
-        "Select a class and date to view its students."
+        "Select your classroom, date and session to record attendance."
       )}
 
-      ${picker("ta")}
+      <div class="ta-filters">
+        ${picker("ta")}
 
-      <section class="ta-picker-panel panel">
-        <label>
-          Attendance date
-          <input
-            id="attendance-date"
-            type="date"
-            value="${h(selectedDate)}"
-            max="${h(state.today)}"
-          >
-        </label>
-      </section>
+        <section class="ta-picker-panel panel">
+          <h2>Attendance date</h2>
 
-      ${classroom ? `
+          <label>
+            Select date
+
+            <input
+              id="attendance-date"
+              type="date"
+              value="${h(selectedDate)}"
+              max="${h(state.today)}"
+            >
+          </label>
+        </section>
+
         <section class="ta-picker-panel panel">
           <h2>Attendance session</h2>
 
-          <select id="lesson-select">
-            <option value="">— Select a session —</option>
+          <label for="lesson-select">
+            Select session
+          </label>
 
-            ${lessons.map(lesson => `
+          <select
+            id="lesson-select"
+            aria-label="Attendance session"
+            ${
+              !classroom || !lessons.length
+                ? "disabled"
+                : ""
+            }
+          >
+            <option value="">
+              — Select a session —
+            </option>
+
+            ${lessons.map(item => `
               <option
-                value="${h(lesson.id)}"
-                ${lesson.id === lid ? "selected" : ""}
+                value="${h(item.id)}"
+                ${item.id === lid ? "selected" : ""}
               >
                 ${h(
-                  lesson.start_time + "–" + lesson.end_time +
-                  " · " + (lesson.topic || "Class session")
+                  item.start_time +
+                  "–" +
+                  item.end_time +
+                  " · " +
+                  (item.topic || "Class session")
                 )}
               </option>
             `).join("")}
           </select>
 
-          ${selectedDate <= state.today ? `
-            <details
-              class="ta-create-session"
-              ${lessons.length ? "" : "open"}
-            >
-              <summary>
-                ＋ Create a session for this date
-              </summary>
-
-              ${sessionForm("ta", true)}
-            </details>
-          ` : ""}
-        </section>
-
-        <section class="ta-list-panel panel">
-          <h2>Student attendance</h2>
-
-          ${canSave ? "" : `
-            <p class="ta-warning">
-              Create or select a session above.
-              Future attendance cannot be recorded.
+          <div class="ta-session-help">
+            <p>
+              ${
+                !classroom
+                  ? "Choose your classroom first."
+                  : !lessons.length
+                    ? "No sessions scheduled for this date."
+                    : "Choose the class session whose attendance you want to record."
+              }
             </p>
-          `}
 
-          ${students.map(student => `
-            <form
-              id="attendance-${h(student.id)}"
-              data-kind="attendance"
-              data-student="${h(student.id)}"
-            ></form>
-          `).join("")}
+            ${classroom ? `
+              <a
+                class="ta-manage-link"
+                href="${h(url(
+                  "classes",
+                  cid,
+                  "",
+                  selectedDate
+                ))}"
+              >
+                Schedule a session in Daily Classes →
+              </a>
+            ` : ""}
+          </div>
+        </section>
+      </div>
+
+      <section class="ta-list-panel panel">
+        <h2>Student attendance</h2>
+
+        ${summary ? `
+          <p class="ta-session-caption">
+            ${h(classroom.name)}
+            · ${h(selectedDate)}
+            · ${h(lesson.start_time)}–${h(lesson.end_time)}
+          </p>
+
+          <div
+            class="ta-session-stats"
+            aria-label="Selected session attendance totals"
+          >
+            ${[
+              [
+                "Total students",
+                summary.total,
+                "total"
+              ],
+              [
+                "Present",
+                summary.counts.Present,
+                "present"
+              ],
+              [
+                "Absent",
+                summary.counts.Absent,
+                "absent"
+              ],
+              [
+                "Late",
+                summary.counts.Late,
+                "late"
+              ],
+              [
+                "Excused",
+                summary.counts.Excused,
+                "excused"
+              ],
+              [
+                "Not marked",
+                summary.counts["Not marked"],
+                "unmarked"
+              ]
+            ].map(([label, count, tone]) => `
+              <div class="ta-stat ta-stat-${tone}">
+                <span>${label}</span>
+                <strong>${count}</strong>
+              </div>
+            `).join("")}
+          </div>
+
+          <p class="ta-count-note">
+            Attended (Present + Late):
+            <strong>
+              ${
+                summary.counts.Present +
+                summary.counts.Late
+              }
+            </strong>.
+            Not marked is separate from Absent.
+          </p>
+        ` : ""}
+
+        ${canSave ? "" : `
+          <p class="ta-warning">
+            ${
+              !classroom
+                ? "Choose a classroom, date and session to view students."
+                : !lesson
+                  ? "Choose an existing session above, or schedule one in Daily Classes."
+                  : "Future attendance cannot be recorded."
+            }
+          </p>
+        `}
+
+        ${students.map(student => `
+          <form
+            id="attendance-${h(student.id)}"
+            data-kind="attendance"
+            data-student="${h(student.id)}"
+          ></form>
+        `).join("")}
+
+        ${table(
+          [
+            "Student",
+            "Student ID",
+            "Saved status",
+            "Mark attendance",
+            "Action"
+          ],
+          students.map(student => {
+            const editable =
+              canSave &&
+              student.can_mark;
+
+            const statusClass =
+              student.status === "Not marked"
+                ? "unmarked"
+                : student.status.toLowerCase();
+
+            return `
+              <tr data-search="${find([
+                student.name,
+                student.student_no
+              ])}">
+                <td>
+                  <div class="ta-person">
+                    <span class="ta-avatar">
+                      ${
+                        h(
+                          (student.name || "S")
+                            .slice(0, 1)
+                        )
+                      }
+                    </span>
+
+                    <span class="ta-person-copy">
+                      <strong>
+                        ${h(student.name)}
+                      </strong>
+
+                      ${!student.can_mark ? `
+                        <small>
+                          Previous enrolment · read only
+                        </small>
+                      ` : ""}
+                    </span>
+                  </div>
+                </td>
+
+                <td>
+                  <span class="ta-student-id">
+                    ${h(student.student_no)}
+                  </span>
+                </td>
+
+                <td>
+                  <span
+                    class="ta-status ta-${h(statusClass)}"
+                  >
+                    ${h(student.status)}
+                  </span>
+                </td>
+
+                <td>
+                  <select
+                    name="status"
+                    form="attendance-${h(student.id)}"
+                    aria-label="Attendance for ${h(student.name)}"
+                    required
+                    ${editable ? "" : "disabled"}
+                  >
+                    <option value="">Select…</option>
+
+                    ${[
+                      "Present",
+                      "Absent",
+                      "Late",
+                      "Excused"
+                    ].map(status => `
+                      <option
+                        value="${status}"
+                        ${
+                          student.status === status
+                            ? "selected"
+                            : ""
+                        }
+                      >
+                        ${status}
+                      </option>
+                    `).join("")}
+                  </select>
+                </td>
+
+                <td>
+                  <button
+                    class="ta-save"
+                    type="submit"
+                    form="attendance-${h(student.id)}"
+                    ${
+                      editable
+                        ? ""
+                        : "disabled data-locked"
+                    }
+                  >
+                    Save
+                  </button>
+                </td>
+              </tr>
+            `;
+          })
+        )}
+      </section>
+
+      ${classroom ? `
+        <section class="ta-report-panel panel">
+          <div class="ta-report-heading">
+            <div>
+              <h2>Class attendance summary</h2>
+
+              <p>
+                ${h(classroom.code)}
+                · ${h(classroom.name)}
+                · All held sessions
+              </p>
+            </div>
+
+            <a
+              class="ta-manage-link"
+              href="${h(url("classes", cid))}"
+            >
+              Daily Classes →
+            </a>
+          </div>
+
+          <div class="ta-class-stats">
+            <div class="ta-stat">
+              <span>Total classes held</span>
+              <strong>${report.held.length}</strong>
+            </div>
+
+            <div class="ta-stat">
+              <span>Scheduled sessions</span>
+              <strong>${report.lessons.length}</strong>
+            </div>
+
+            <div class="ta-stat">
+              <span>Currently enrolled students</span>
+              <strong>
+                ${report.activeStudents.length}
+              </strong>
+            </div>
+          </div>
+
+          <p class="ta-count-note">
+            Held classes have reached their end time.
+            Upcoming sessions are excluded.
+            Each row shows attendance for that session;
+            Present and Late are shown separately.
+          </p>
 
           ${table(
             [
-              "Student",
-              "Student ID",
-              "Saved status",
-              "Mark attendance",
+              "Date / session",
+              "Students",
+              "Present",
+              "Late",
+              "Absent",
+              "Excused",
+              "Not marked",
               "Action"
             ],
-
-            students.map(student => {
-              const attendance = state.attendance.find(record =>
-                record.lesson_id === lid &&
-                record.student_id === student.id
-              );
+            report.held.map(item => {
+              const totals = report.forLesson(item);
 
               return `
-                <tr data-search="${find([
-                  student.name,
-                  student.student_no
-                ])}">
+                <tr
+                  class="${
+                    item.id === lid
+                      ? "ta-selected-session"
+                      : ""
+                  }"
+                  data-search="${find([
+                    item.lesson_date,
+                    item.topic
+                  ])}"
+                >
                   <td>
-                    <div class="ta-person">
-                      <span class="ta-avatar">
-                        ${h((student.name || "S").slice(0, 1))}
-                      </span>
-                      <strong>${h(student.name)}</strong>
-                    </div>
+                    <strong>
+                      ${h(item.lesson_date)}
+                    </strong>
+
+                    <small>
+                      ${h(item.start_time)}–${h(item.end_time)}
+                    </small>
+
+                    ${item.topic ? `
+                      <small>${h(item.topic)}</small>
+                    ` : ""}
                   </td>
 
+                  <td>${totals.total}</td>
+
                   <td>
-                    <span class="ta-student-id">
-                      ${h(student.student_no)}
+                    <span class="ta-status ta-present">
+                      ${totals.counts.Present}
                     </span>
                   </td>
 
                   <td>
-                    <span class="ta-status ta-${h(
-                      (attendance?.status || "unmarked")
-                        .toLowerCase()
-                    )}">
-                      ${h(attendance?.status || "Not marked")}
+                    <span class="ta-status ta-late">
+                      ${totals.counts.Late}
                     </span>
                   </td>
 
                   <td>
-                    <select
-                      name="status"
-                      form="attendance-${h(student.id)}"
-                      ${canSave ? "" : "disabled"}
-                    >
-                      <option value="">Select…</option>
+                    <span class="ta-status ta-absent">
+                      ${totals.counts.Absent}
+                    </span>
+                  </td>
 
-                      ${[
-                        "Present",
-                        "Absent",
-                        "Late",
-                        "Excused"
-                      ].map(status => `
-                        <option
-                          ${attendance?.status === status
-                            ? "selected"
-                            : ""}
-                        >
-                          ${status}
-                        </option>
-                      `).join("")}
-                    </select>
+                  <td>${totals.counts.Excused}</td>
+
+                  <td>
+                    ${totals.counts["Not marked"]}
                   </td>
 
                   <td>
-                    <button
-                      class="ta-save"
-                      type="submit"
-                      form="attendance-${h(student.id)}"
-                      ${canSave ? "" : "disabled data-locked"}
+                    <a
+                      class="ta-manage-link"
+                      href="${h(url(
+                        "attendance",
+                        cid,
+                        item.id,
+                        item.lesson_date
+                      ))}"
                     >
-                      Save
-                    </button>
+                      View →
+                    </a>
                   </td>
                 </tr>
               `;
@@ -1254,7 +1782,6 @@ function attendancePage() {
     </div>
   `;
 }
-
 function myAttendance() {
   const record = state.work.find(item =>
     item.work_date === state.today

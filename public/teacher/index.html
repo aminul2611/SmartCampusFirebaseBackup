@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="../static/teacher/layout.css">
   <link rel="stylesheet" href="../static/teacher/sidebar.css">
   <link rel="stylesheet" href="../static/teacher/profile.css">
-  <link rel="stylesheet" href="../static/teacher/portal.css?v=2">
+  <link rel="stylesheet" href="../static/teacher/portal.css?v=3">
 </head>
 
 <body data-timezone="Asia/Shanghai">
@@ -43,9 +43,9 @@
         <span class="tsb-label">Student Details</span>
       </a>
 
-      <a class="tsb-link" href="#marks">
-        <span class="tsb-icon">✓</span>
-        <span class="tsb-label">Student Marks</span>
+      <a class="tsb-link" href="#classes">
+        <span class="tsb-icon">▤</span>
+        <span class="tsb-label">Daily Classes</span>
       </a>
 
       <a class="tsb-link" href="#attendance">
@@ -53,9 +53,9 @@
         <span class="tsb-label">Student Attendance</span>
       </a>
 
-      <a class="tsb-link" href="#classes">
-        <span class="tsb-icon">▤</span>
-        <span class="tsb-label">Daily Classes</span>
+      <a class="tsb-link" href="#marks">
+        <span class="tsb-icon">✓</span>
+        <span class="tsb-label">Student Marks</span>
       </a>
 
       <a class="tsb-link" href="#notices">
@@ -159,7 +159,7 @@
   </div>
 
   <script type="module">
-    import("../js/teacher-workspace.js?v=2").catch(error => {
+    import("../js/teacher-workspace.js?v=3").catch(error => {
       document.getElementById("status").textContent =
         "Could not load Teacher workspace: " + error.message;
 
