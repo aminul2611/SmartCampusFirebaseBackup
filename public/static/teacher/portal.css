@@ -97,35 +97,234 @@
 @media(prefers-reduced-motion:reduce){
 .td-dashboard .td-card,.td-dashboard .td-lesson{transition:none}
 }
-.td-dashboard .td-content>.td-panel:last-child{position:relative;overflow:hidden;padding:26px;border:1px solid #d5e9df;border-radius:20px;background:linear-gradient(135deg,#effaf4,#f8fcfa);box-shadow:0 8px 24px rgba(38,105,77,.04)}
-.td-dashboard .td-content>.td-panel:last-child::before{position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,#28a780,#73c6b0);content:""}
-.td-dashboard .td-content>.td-panel:last-child h2{display:flex;align-items:center;gap:12px;margin-bottom:10px;color:#285844}
-.td-dashboard .td-content>.td-panel:last-child h2::before{display:inline-grid;place-items:center;flex-shrink:0;width:42px;height:42px;border:1px solid #c6e5d5;border-radius:13px;background:#dcf2e6;color:#278866;font-size:24px;content:"◷"}
-.td-dashboard .td-content>.td-panel:last-child .td-panel-heading{margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #dcece3}
-.td-dashboard .td-content>.td-panel:last-child .td-panel-heading p{margin:0;color:#759182}
-.td-dashboard .td-content>.td-panel:last-child .td-empty{display:flex;flex-direction:column;align-items:center;gap:14px;margin:0;padding:28px 18px;border:1px dashed #cce2d5;border-radius:14px;background:rgba(255,255,255,.85);color:#748c7e;text-align:center}
-.td-dashboard .td-content>.td-panel:last-child .td-empty::before{display:grid;place-items:center;width:48px;height:48px;border-radius:15px;background:#e6f5ec;color:#409c78;font-size:25px;content:"▦"}
-.td-dashboard .td-lesson{padding:18px;border:1px solid #dce9e1;border-radius:14px;background:#fff}
-.td-dashboard .td-lesson-time{border-color:#cfe7d9;background:#eaf7ef;color:#2d8462}
-.td-dashboard .td-dashboard-notices{padding:26px;border:1px solid #e0d8f5;border-radius:20px;background:linear-gradient(135deg,#f4efff,#f5f7ff)}
-.td-dashboard-notices summary{position:relative;display:block;min-height:34px;padding:4px 48px 4px 0;color:#49415f;font-size:15px;font-weight:600;line-height:1.8}
-.td-dashboard-notices summary::after{position:absolute;top:3px;right:0;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:#f0e9ff;color:#8057cf;font-size:20px;content:"+"}
-.td-dashboard-notices details[open]>summary::after{content:"−"}
-.td-dashboard-notices summary small,.td-dashboard-notices summary time{display:block;margin-top:5px;color:#9290a5;font-size:11px;font-weight:400}
-.td-dashboard-notices details{margin-top:14px;padding:18px 20px;border:1px solid #e5dff2;border-radius:14px;background:#fff}
-.td-dashboard-notices details[open]{border-color:#bcabe6;box-shadow:0 5px 18px rgba(102,74,157,.05)}
-.td-dashboard-notices details>p{margin-bottom:0;color:#727087;line-height:1.8}
-@media(max-width:700px){
-.td-dashboard .td-content>.td-panel:last-child,.td-dashboard .td-dashboard-notices{padding:20px 16px}
-.td-dashboard-notices details{padding:16px}
+/* =========================================
+   Teacher Dashboard: Today's Classes
+   ========================================= */
+
+.td-dashboard .td-content > .td-today-panel {
+  position: relative;
+  overflow: hidden;
+  padding: 26px;
+  border: 1px solid #d5e9df;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #effaf4, #f8fcfa);
+  box-shadow: 0 8px 24px rgba(38, 105, 77, 0.04);
 }
-.td-dashboard .td-content>.td-panel:last-of-type,.td-dashboard .td-content>.td-dashboard-notices{width:100%;margin:0 0 24px;padding:24px;border-width:1px;border-radius:18px}
-.td-dashboard-notices details{padding:18px 20px}
-.td-dashboard-notices summary{padding:4px 46px 4px 0;color:#302946;font-size:16px;font-weight:700;line-height:1.7}
-.td-dashboard-notices summary small,.td-dashboard-notices summary time,.td-dashboard-notices details>small,.td-dashboard-notices details>time{display:block;margin-top:7px;color:#687087;font-size:12px;font-weight:400}
-.td-dashboard-notices details>p,.td-dashboard-notices details>div{color:#354057;font-size:14px;line-height:1.9;overflow-wrap:anywhere}
-@media(max-width:700px){
-.td-dashboard .td-content>.td-panel:last-of-type,.td-dashboard .td-content>.td-dashboard-notices{padding:20px 16px}
+
+.td-dashboard .td-content > .td-today-panel::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, #28a780, #73c6b0);
+  content: "";
+}
+
+.td-dashboard .td-content > .td-today-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #285844;
+}
+
+.td-dashboard .td-content > .td-today-panel h2::before {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #c6e5d5;
+  border-radius: 13px;
+  background: #dcf2e6;
+  color: #278866;
+  font-size: 24px;
+  content: "◷";
+}
+
+.td-dashboard .td-content > .td-today-panel .td-panel-heading {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dcece3;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-panel-heading p {
+  margin: 0;
+  color: #759182;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 28px 18px;
+  border: 1px dashed #cce2d5;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #748c7e;
+  text-align: center;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-empty::before {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  background: #e6f5ec;
+  color: #409c78;
+  font-size: 25px;
+  content: "▦";
+}
+
+.td-dashboard .td-today-panel .td-lesson {
+  padding: 18px;
+  border: 1px solid #dce9e1;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.td-dashboard .td-today-panel .td-lesson-time {
+  border-color: #cfe7d9;
+  background: #eaf7ef;
+  color: #2d8462;
+}
+
+/* =========================================
+   Teacher Dashboard: Campus Notices
+   ========================================= */
+
+.td-dashboard .td-content > .td-dashboard-notices {
+  position: relative;
+  width: 100%;
+  margin: 0 0 24px;
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid #e0d8f5;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f4efff, #f5f7ff);
+  box-shadow: 0 8px 24px rgba(66, 57, 130, 0.04);
+}
+
+.td-dashboard .td-content > .td-dashboard-notices::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, #8060d9, #76a2e8);
+  content: "";
+}
+
+.td-dashboard .td-dashboard-notices > * {
+  min-width: 0;
+}
+
+.td-dashboard .td-dashboard-notices summary {
+  position: relative;
+  display: block;
+  min-height: 34px;
+  padding: 4px 46px 4px 0;
+  border-radius: 5px;
+  color: #302946;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.7;
+  list-style: none;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.td-dashboard .td-dashboard-notices summary::-webkit-details-marker {
+  display: none;
+}
+
+.td-dashboard .td-dashboard-notices summary::after {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #f0e9ff;
+  color: #8057cf;
+  font-size: 20px;
+  content: "+";
+}
+
+.td-dashboard .td-dashboard-notices details[open] > summary {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f0edf6;
+}
+
+.td-dashboard .td-dashboard-notices details[open] > summary::after {
+  content: "−";
+}
+
+.td-dashboard .td-dashboard-notices summary small,
+.td-dashboard .td-dashboard-notices summary time,
+.td-dashboard .td-dashboard-notices details > small,
+.td-dashboard .td-dashboard-notices details > time {
+  display: block;
+  margin-top: 7px;
+  color: #687087;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.td-dashboard .td-dashboard-notices details {
+  margin-top: 14px;
+  padding: 18px 20px;
+  border: 1px solid #e5dff2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(43, 47, 85, 0.025);
+}
+
+.td-dashboard .td-dashboard-notices details[open] {
+  border-color: #bcabe6;
+  box-shadow: 0 5px 18px rgba(102, 74, 157, 0.05);
+}
+
+.td-dashboard .td-dashboard-notices details > p,
+.td-dashboard .td-dashboard-notices details > div {
+  color: #354057;
+  font-size: 14px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.td-dashboard .td-dashboard-notices p {
+  overflow-wrap: anywhere;
+}
+
+/* =========================================
+   Responsive layout
+   ========================================= */
+
+@media (max-width: 700px) {
+  .td-dashboard .td-content > .td-today-panel,
+  .td-dashboard .td-content > .td-dashboard-notices {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  .td-dashboard .td-content > .td-dashboard-notices h2,
+  .td-dashboard .td-content > .td-dashboard-notices h3 {
+    font-size: 18px;
+  }
+
+  .td-dashboard .td-dashboard-notices details {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .td-dashboard .td-today-panel .td-lesson {
+    transition: none;
+  }
 }
 .ts-page{--ts-ink:#26334b;--ts-muted:#7c879d;--ts-border:#e3e8f2;--ts-accent:#6957d8;width:100%;color:var(--ts-ink)}
 .ts-page *,.ts-page *::before,.ts-page *::after{box-sizing:border-box}
@@ -487,3 +686,260 @@
 .tn-page .tn-also-admin small{display:block;margin-top:4px;color:#819588;font-size:11px;line-height:1.6}
 .td-day{display:grid;place-items:center;min-height:34px;border-radius:8px;color:#68738b;font-size:12px}
 .td-day.td-today{background:#7057d9;color:#fff;font-weight:700}
+/* =========================================
+   Teacher Dashboard: Today's Classes
+   ========================================= */
+
+.td-dashboard .td-content > .td-today-panel {
+  position: relative;
+  overflow: hidden;
+  padding: 26px;
+  border: 1px solid #d5e9df;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #effaf4, #f8fcfa);
+  box-shadow: 0 8px 24px rgba(38, 105, 77, 0.04);
+}
+
+.td-dashboard .td-content > .td-today-panel::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, #28a780, #73c6b0);
+  content: "";
+}
+
+.td-dashboard .td-content > .td-today-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #285844;
+}
+
+.td-dashboard .td-content > .td-today-panel h2::before {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #c6e5d5;
+  border-radius: 13px;
+  background: #dcf2e6;
+  color: #278866;
+  font-size: 24px;
+  content: "◷";
+}
+
+.td-dashboard .td-content > .td-today-panel .td-panel-heading {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dcece3;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-panel-heading p {
+  margin: 0;
+  color: #759182;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 28px 18px;
+  border: 1px dashed #cce2d5;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #748c7e;
+  text-align: center;
+}
+
+.td-dashboard .td-content > .td-today-panel .td-empty::before {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  background: #e6f5ec;
+  color: #409c78;
+  font-size: 25px;
+  content: "▦";
+}
+
+.td-dashboard .td-today-panel .td-lesson {
+  padding: 18px;
+  border: 1px solid #dce9e1;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.td-dashboard .td-today-panel .td-lesson-time {
+  border-color: #cfe7d9;
+  background: #eaf7ef;
+  color: #2d8462;
+}
+
+/* =========================================
+   Teacher Dashboard: Campus Notices
+   ========================================= */
+
+.td-dashboard .td-content > .td-dashboard-notices {
+  position: relative;
+  width: 100%;
+  margin: 0 0 24px;
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid #e0d8f5;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #f4efff, #f5f7ff);
+  box-shadow: 0 8px 24px rgba(66, 57, 130, 0.04);
+}
+
+.td-dashboard .td-content > .td-dashboard-notices::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, #8060d9, #76a2e8);
+  content: "";
+}
+
+.td-dashboard .td-content > .td-dashboard-notices > * {
+  min-width: 0;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices h2,
+.td-dashboard .td-content > .td-dashboard-notices h3 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e2ddef;
+  color: #51436f;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices h2::before,
+.td-dashboard .td-content > .td-dashboard-notices h3::before {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #dfd3f8;
+  border-radius: 13px;
+  background: #eae1fb;
+  color: #805bcb;
+  font-size: 23px;
+  content: "▤";
+}
+
+.td-dashboard .td-content > .td-dashboard-notices details {
+  margin-top: 14px;
+  padding: 18px 20px;
+  border: 1px solid #e5dff2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(43, 47, 85, 0.025);
+}
+
+.td-dashboard .td-content > .td-dashboard-notices details[open] {
+  border-color: #bcabe6;
+  box-shadow: 0 5px 18px rgba(102, 74, 157, 0.05);
+}
+
+.td-dashboard .td-content > .td-dashboard-notices summary {
+  position: relative;
+  display: block;
+  min-height: 34px;
+  padding: 4px 46px 4px 0;
+  border-radius: 5px;
+  color: #302946;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.7;
+  list-style: none;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices summary::-webkit-details-marker {
+  display: none;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices summary::after {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #f0e9ff;
+  color: #8057cf;
+  font-size: 20px;
+  content: "+";
+}
+
+.td-dashboard .td-content > .td-dashboard-notices details[open] > summary {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f0edf6;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices details[open] > summary::after {
+  content: "−";
+}
+
+.td-dashboard .td-content > .td-dashboard-notices summary small,
+.td-dashboard .td-content > .td-dashboard-notices summary time,
+.td-dashboard .td-content > .td-dashboard-notices details > small,
+.td-dashboard .td-content > .td-dashboard-notices details > time {
+  display: block;
+  margin-top: 7px;
+  color: #687087;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices details > p,
+.td-dashboard .td-content > .td-dashboard-notices details > div {
+  color: #354057;
+  font-size: 14px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.td-dashboard .td-content > .td-dashboard-notices p {
+  overflow-wrap: anywhere;
+}
+
+/* =========================================
+   Responsive layout
+   ========================================= */
+
+@media (max-width: 700px) {
+  .td-dashboard .td-content > .td-today-panel,
+  .td-dashboard .td-content > .td-dashboard-notices {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  .td-dashboard .td-content > .td-dashboard-notices h2,
+  .td-dashboard .td-content > .td-dashboard-notices h3 {
+    font-size: 18px;
+  }
+
+  .td-dashboard .td-content > .td-dashboard-notices details {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .td-dashboard .td-today-panel .td-lesson {
+    transition: none;
+  }
+}
