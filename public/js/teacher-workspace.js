@@ -12,35 +12,32 @@ const $ = id => document.getElementById(id);
 
 const h = value => String(value ?? "").replace(
   /[&<>"']/g,
-  character => ({
+  c => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#39;"
-  }[character])
+  }[c])
 );
 
 const days = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday"
+  "Sunday", "Monday", "Tuesday", "Wednesday",
+  "Thursday", "Friday", "Saturday"
 ];
 
 const labels = {
   dashboard: "Dashboard",
   students: "Student Details",
-  marks: "Student Marks",
   attendance: "Student Attendance",
-  classes: "Daily Classes",
+  marks: "Student Marks",
   notices: "Notices",
   "my-attendance": "My Attendance",
   profile: "Teacher Profile"
 };
+
+const attendanceDrafts = new Map();
+const marksDrafts = new Map();
 
 let state = null;
 let profile = null;
@@ -52,14 +49,16 @@ let page = "dashboard";
 let cid = "";
 let lid = "";
 let selectedDate = "";
-let month = 0;
-let classPage = 0;
+let attendanceView = "take";
+let activeUid = "";
 
-function show(text, error = false) {
-  $("status").textContent = text;
+/* Requests and saved state */
+
+function show(message, error = false) {
+  $("status").textContent = message;
   $("status").className =
     "flash " + (error ? "danger" : "success");
-  $("status").hidden = !text;
+  $("status").hidden = !message;
 }
 
 function lock(value) {
@@ -69,38 +68,40 @@ function lock(value) {
     button.disabled =
       value || button.hasAttribute("data-locked");
   });
+
+  $("content").setAttribute("aria-busy", String(value));
 }
 
-function timeout(promise) {
+function timeout(promise, milliseconds = 25000) {
   let timer;
 
   return Promise.race([
     promise,
-
     new Promise((resolve, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(
-          "Login check timed out. Check your connection."
-        ));
-      }, 25000);
+      timer = setTimeout(
+        () => reject(
+          new Error("Connection timed out. Please try again.")
+        ),
+        milliseconds
+      );
     })
   ]).finally(() => clearTimeout(timer));
 }
 
 async function request(path = "", body, root = false) {
-  if (!auth.currentUser) {
+  const user = auth.currentUser;
+
+  if (!user) {
     throw new Error("Please sign in again.");
   }
 
-  const token = await timeout(
-    auth.currentUser.getIdToken()
-  );
+  const token = await timeout(user.getIdToken());
 
   const controller = new AbortController();
-
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, 70000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    70000
+  );
 
   try {
     const response = await fetch(
@@ -109,26 +110,23 @@ async function request(path = "", body, root = false) {
       path,
       {
         method: body === undefined ? "GET" : "POST",
-
         headers: {
           Authorization: "Bearer " + token,
           "Content-Type": "application/json"
         },
-
         ...(body === undefined
           ? {}
           : { body: JSON.stringify(body) }),
-
         signal: controller.signal
       }
     );
 
-    const contentType =
-      response.headers.get("content-type") || "";
-
-    if (!contentType.includes("application/json")) {
+    if (
+      !(response.headers.get("content-type") || "")
+        .includes("application/json")
+    ) {
       throw new Error(
-        "Teacher API unavailable. Restart the updated Node server."
+        "The Teacher API is unavailable. Please try again."
       );
     }
 
@@ -142,7 +140,7 @@ async function request(path = "", body, root = false) {
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error(
-        "Connection timed out. Refresh the saved list before retrying."
+        "The request timed out. Refresh saved information before retrying."
       );
     }
 
@@ -158,28 +156,14 @@ async function refresh() {
     request("", undefined, true)
   ]);
 
-  state = data;
-  profile = account.profile;
-
-  if (!selectedDate) {
-    selectedDate = state.today;
+  if (auth.currentUser?.uid !== account.profile.id) {
+    throw new Error("The account changed. Please reload.");
   }
 
+  state = data;
+  profile = account.profile;
+  selectedDate ||= state.today;
   refreshNeeded = false;
-}
-
-function identity() {
-  document.querySelectorAll("[data-teacher-name]")
-    .forEach(element => {
-      element.textContent = profile.name;
-    });
-
-  document.querySelectorAll("[data-initial]")
-    .forEach(element => {
-      element.textContent = (profile.name || "T")
-        .slice(0, 1)
-        .toUpperCase();
-    });
 }
 
 async function save(
@@ -192,8 +176,7 @@ async function save(
 
   if (refreshNeeded) {
     show(
-      "Your previous change was saved. " +
-      "Use Refresh before saving another change.",
+      "Your previous change was saved. Refresh before making another change.",
       true
     );
     return;
@@ -208,15 +191,52 @@ async function save(
     refreshNeeded = true;
     after(data);
 
-    await refresh();
-    render();
+    if (/^\/classes\/[^/]+\/attendance$/.test(path)) {
+      const lesson = state.lessons.find(
+        item => item.id === body.lesson_id
+      );
 
-    show(data.message || "Saved.");
+      const record = {
+        class_id: lesson.class_id,
+        lesson_id: body.lesson_id,
+        student_id: body.student_id,
+        status: body.status,
+        session_date: lesson.lesson_date
+      };
+
+      const index = state.attendance.findIndex(item =>
+        item.lesson_id === body.lesson_id &&
+        item.student_id === body.student_id
+      );
+
+      if (index < 0) {
+        state.attendance.push(record);
+      } else {
+        state.attendance[index] = {
+          ...state.attendance[index],
+          ...record
+        };
+      }
+
+      attendanceDrafts.delete(
+        JSON.stringify([
+          body.lesson_id,
+          body.student_id
+        ])
+      );
+
+      refreshNeeded = false;
+    } else {
+      await refresh();
+    }
+
+    render();
+    show(data.message || "Saved successfully.");
   } catch (error) {
     show(
       (
         refreshNeeded
-          ? "Your change was saved, but the list could not refresh. Use Refresh. "
+          ? "Saved, but the list could not refresh. Use Refresh. "
           : ""
       ) + error.message,
       true
@@ -227,42 +247,63 @@ async function save(
 }
 
 function reqid(type) {
-  const storageKey = "smart-campus.teacher-" + type;
-  let value = sessionStorage.getItem(storageKey);
+  const key =
+    "smart-campus.teacher." + activeUid + "." + type;
+
+  let value = sessionStorage.getItem(key);
 
   if (!/^[a-f0-9]{32}$/.test(value || "")) {
     value = crypto.randomUUID().replaceAll("-", "");
-    sessionStorage.setItem(storageKey, value);
+    sessionStorage.setItem(key, value);
   }
 
   return value;
 }
 
 function clearid(type) {
-  sessionStorage.removeItem("smart-campus.teacher-" + type);
+  sessionStorage.removeItem(
+    "smart-campus.teacher." + activeUid + "." + type
+  );
 }
 
+/* Shared helpers */
+
 const selected = () =>
-  state.classes.find(classroom => classroom.id === cid);
+  state.classes.find(item => item.id === cid);
 
 function roster() {
   const ids = new Set(
     state.enrolments
-      .filter(record => record.class_id === cid)
-      .map(record => record.student_id)
+      .filter(item =>
+        item.class_id === cid &&
+        item.active !== false
+      )
+      .map(item => item.student_id)
   );
 
   return state.students
-    .filter(student => ids.has(student.id))
+    .filter(item => ids.has(item.id))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function url(name, classId = "", lesson = "", date = "") {
+function url(
+  name,
+  classId = "",
+  lesson = "",
+  date = "",
+  view = ""
+) {
+  if (name === "classes") {
+    name = "attendance";
+    view = "sessions";
+  }
+
   const query = new URLSearchParams();
 
   if (classId) query.set("class", classId);
   if (lesson) query.set("lesson", lesson);
   if (date) query.set("date", date);
+  if (view) query.set("view", view);
 
   return "#" + name + (query.size ? "?" + query : "");
 }
@@ -295,23 +336,26 @@ function input(
   `;
 }
 
-function table(headings, records) {
+function table(headings, rows) {
   return `
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            ${headings.map(text =>
-              `<th>${text}</th>`
-            ).join("")}
+            ${headings.map(label => `
+              <th scope="col">${h(label)}</th>
+            `).join("")}
           </tr>
         </thead>
 
         <tbody>
-          ${records.join("") || `
+          ${rows.join("") || `
             <tr>
-              <td colspan="${headings.length}" class="empty">
-                No records yet.
+              <td
+                colspan="${headings.length}"
+                class="empty-state"
+              >
+                No records to display.
               </td>
             </tr>
           `}
@@ -323,11 +367,9 @@ function table(headings, records) {
 
 function heading(prefix, title, description) {
   return `
-    <header class="${prefix}-heading">
+    <header class="page-intro ${prefix}-heading">
       <div>
-        <span class="${prefix}-eyebrow">
-          TEACHER WORKSPACE
-        </span>
+        <span class="eyebrow">TEACHER WORKSPACE</span>
         <h1>${title}</h1>
         <p>${description}</p>
       </div>
@@ -337,29 +379,36 @@ function heading(prefix, title, description) {
 
 function picker(prefix) {
   return `
-    <section class="${prefix}-class-panel panel">
-      <h2>Your classroom</h2>
+    <section
+      class="panel classroom-selector ${prefix}-class-panel"
+    >
+      <div>
+        <h2>Your classroom</h2>
+        <p>
+          ${
+            selected()
+              ? h(selected().semester || "Assigned class")
+              : "Choose an assigned class to continue."
+          }
+        </p>
+      </div>
 
       <label>
-        Select class
+        <span class="sr-only">Select class</span>
 
-        <select data-class>
-          <option value="">— Select a class —</option>
+        <select data-class aria-label="Select class">
+          <option value="">Select a class</option>
 
-          ${state.classes.map(classroom => `
+          ${state.classes.map(item => `
             <option
-              value="${h(classroom.id)}"
-              ${classroom.id === cid ? "selected" : ""}
+              value="${h(item.id)}"
+              ${item.id === cid ? "selected" : ""}
             >
-              ${h(classroom.code + " — " + classroom.name)}
+              ${h(item.code + " — " + item.name)}
             </option>
           `).join("")}
         </select>
       </label>
-
-      ${selected()
-        ? `<p>${h(selected().code + " · " + selected().name)}</p>`
-        : '<p class="empty">Choose an assigned class to continue.</p>'}
     </section>
   `;
 }
@@ -369,28 +418,30 @@ function stamp(value) {
 
   const seconds = value.seconds ?? value._seconds;
 
-  if (seconds != null) {
-    return new Date(seconds * 1000);
-  }
+  const parsed = new Date(
+    seconds != null
+      ? seconds * 1000
+      : typeof value === "number"
+        ? value * 1000
+        : value
+  );
 
-  return typeof value === "number"
-    ? new Date(value * 1000)
-    : new Date(value);
+  return Number.isFinite(parsed.getTime())
+    ? parsed
+    : null;
 }
 
 function time(value) {
-  const parsed = stamp(value);
+  const date = stamp(value);
 
-  if (!parsed || !Number.isFinite(parsed.getTime())) {
-    return "—";
-  }
-
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Shanghai",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).format(parsed);
+  return date
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Shanghai",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      }).format(date)
+    : "—";
 }
 
 function duration(record) {
@@ -407,424 +458,137 @@ function duration(record) {
     )
   );
 
-  return Math.floor(minutes / 60) +
-    "h " + minutes % 60 + "m";
-}
-
-function noticeCards(notices, sent = false) {
-  return notices.map(notice => {
-    const parsed = stamp(notice.created_at);
-
-    const when = parsed && Number.isFinite(parsed.getTime())
-      ? new Intl.DateTimeFormat("en-GB", {
-          timeZone: "Asia/Shanghai",
-          dateStyle: "medium",
-          timeStyle: "short"
-        }).format(parsed)
-      : "Date unavailable";
-
-    const by = sent
-      ? notice.audience === "admins"
-        ? "Admin"
-        : `${notice.recipient_ids?.length || 0} recipients`
-      : notice.author_name || "Campus";
-
-    return `
-      <details
-        class="tn-notice ${sent ? "tn-sent" : ""}"
-        data-search="${find([
-          notice.title,
-          notice.body,
-          notice.author_name
-        ])}"
-        ${sent ? "" : "open"}
-      >
-        <summary>${h(notice.title)}</summary>
-
-        <small class="tn-meta">
-          ${h(by)} · ${h(when)}
-          ${sent ? " · Published" : ""}
-        </small>
-
-        <div class="tn-body">${h(notice.body)}</div>
-      </details>
-    `;
-  }).join("") || '<p class="empty">No notices yet.</p>';
-}
-
-function calendar() {
-  const today = new Date(state.today + "T12:00:00Z");
-
-  const current = new Date(Date.UTC(
-    today.getUTCFullYear(),
-    today.getUTCMonth() + month,
-    1
-  ));
-
-  const first = current.getUTCDay();
-
-  const count = new Date(Date.UTC(
-    current.getUTCFullYear(),
-    current.getUTCMonth() + 1,
-    0
-  )).getUTCDate();
-
-  return `
-    <section class="td-calendar">
-      <div class="td-calendar-heading">
-        <button
-          type="button"
-          data-action="month-prev"
-          class="td-calendar-arrow"
-        >‹</button>
-
-        <h2>
-          ${h(
-            new Intl.DateTimeFormat("en-GB", {
-              timeZone: "UTC",
-              month: "long",
-              year: "numeric"
-            }).format(current)
-          )}
-        </h2>
-
-        <button
-          type="button"
-          data-action="month-next"
-          class="td-calendar-arrow"
-        >›</button>
-      </div>
-
-      <div class="td-calendar-grid">
-        ${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
-          .map(text => `
-            <span class="td-weekday">${text}</span>
-          `).join("")}
-
-        ${"<span></span>".repeat(first)}
-
-        ${Array.from({ length: count }, (_, index) => {
-          const isToday =
-            today.getUTCFullYear() === current.getUTCFullYear() &&
-            today.getUTCMonth() === current.getUTCMonth() &&
-            today.getUTCDate() === index + 1;
-
-          return `
-            <span class="td-day ${isToday ? "td-today" : ""}">
-              ${index + 1}
-            </span>
-          `;
-        }).join("")}
-      </div>
-
-      <div class="td-calendar-footer">
-        <span>Highlighted: today</span>
-
-        <button
-          type="button"
-          data-action="month-today"
-          class="td-today-button"
-        >
-          Today
-        </button>
-      </div>
-    </section>
-  `;
-}
-
-function dashboard() {
-  const lessons = state.lessons
-    .filter(lesson => lesson.lesson_date === state.today)
-    .sort((a, b) =>
-      a.start_time.localeCompare(b.start_time)
-    );
-
-  const pages = Math.max(
-    1,
-    Math.ceil(state.classes.length / 3)
+  return (
+    Math.floor(minutes / 60) +
+    "h " +
+    minutes % 60 +
+    "m"
   );
-
-  classPage = Math.min(classPage, pages - 1);
-
-  return `
-    <div class="td-dashboard">
-      <div class="td-layout">
-
-        <div class="td-content">
-
-          <div class="td-heading">
-            <div>
-              <h1>Welcome, ${h(profile.name)}!</h1>
-              <p>Your classes, students and teaching tools.</p>
-            </div>
-
-            <a class="button" href="#my-attendance">
-              My attendance
-            </a>
-          </div>
-
-          <h2 class="td-section-title">Teaching tools</h2>
-
-          <div class="td-tools">
-            ${[
-              ["students", "Student Details", "S", "blue"],
-              ["attendance", "Manual Attendance", "A", "green"],
-              ["classes", "Daily Classes", "C", "orange"]
-            ].map(([name, label, icon, color]) => `
-              <a class="td-card" href="#${name}">
-                <span class="td-icon ${color}">${icon}</span>
-                <h3>${label}</h3>
-                <span class="link">Open section →</span>
-              </a>
-            `).join("")}
-          </div>
-
-          <section class="td-panel">
-            <div class="td-panel-heading">
-              <div>
-                <h2>My classes</h2>
-                <p>Your assigned classes and subjects.</p>
-              </div>
-
-              <span class="td-badge">
-                ${state.classes.length} classes
-              </span>
-            </div>
-
-            <div class="td-class-grid">
-              ${state.classes
-                .slice(classPage * 3, classPage * 3 + 3)
-                .map(classroom => `
-                  <a
-                    class="td-card"
-                    href="${h(url("students", classroom.id))}"
-                    data-search="${find([
-                      classroom.code,
-                      classroom.name,
-                      classroom.semester
-                    ])}"
-                  >
-                    <span class="td-icon">▤</span>
-                    <small>${h(classroom.code)}</small>
-                    <h3>${h(classroom.name)}</h3>
-                    <span class="link">Open class →</span>
-                  </a>
-                `).join("") ||
-                '<p class="td-empty">No classes assigned yet.</p>'}
-            </div>
-
-            ${pages > 1 ? `
-              <div class="td-pagination">
-                <button
-                  type="button"
-                  data-action="class-prev"
-                  ${classPage === 0 ? "disabled data-locked" : ""}
-                >‹ Previous</button>
-
-                <span>Page ${classPage + 1} of ${pages}</span>
-
-                <button
-                  type="button"
-                  data-action="class-next"
-                  ${classPage === pages - 1
-                    ? "disabled data-locked"
-                    : ""}
-                >Next ›</button>
-              </div>
-            ` : ""}
-          </section>
-
-          <section class="td-panel td-today-panel">
-            <div class="td-panel-heading">
-              <div>
-                <h2>Today's classes</h2>
-                <p>Your scheduled sessions for today.</p>
-              </div>
-            </div>
-
-            ${lessons.map(lesson => `
-              <a
-                class="td-lesson"
-                href="${h(url(
-                  "attendance",
-                  lesson.class_id,
-                  lesson.id,
-                  lesson.lesson_date
-                ))}"
-              >
-                <span>
-                  <strong>
-                    ${h(
-                      state.classes.find(classroom =>
-                        classroom.id === lesson.class_id
-                      )?.name
-                    )}
-                  </strong>
-
-                  <small>
-                    ${h(lesson.topic || "Class session")}
-                    · ${h(lesson.room || "Room not set")}
-                  </small>
-                </span>
-
-                <strong class="td-lesson-time">
-                  ${h(lesson.start_time)}–${h(lesson.end_time)}
-                </strong>
-              </a>
-            `).join("") ||
-              '<p class="td-empty">No classes scheduled for today.</p>'}
-          </section>
-
-          <section class="td-panel td-dashboard-notices">
-            <h2>Campus notices</h2>
-            ${noticeCards(state.received)}
-          </section>
-
-        </div>
-
-        <aside class="td-side">
-          <div class="td-widget">
-            <div class="td-clock">
-              <p class="td-clock-label">Campus time</p>
-              <time
-                id="dashboard-clock"
-                class="td-clock-time"
-              ></time>
-              <p class="td-clock-date">${h(state.today)}</p>
-            </div>
-
-            ${calendar()}
-          </div>
-        </aside>
-
-      </div>
-    </div>
-  `;
 }
+
+/* Student details */
 
 function studentsPage() {
   return `
-    <div class="ts-page">
+    <div>
       ${heading(
         "ts",
         "Student Details",
-        "Choose a class to view its enrolled students."
+        "View the students enrolled in your assigned classes."
       )}
 
       ${picker("ts")}
 
       ${selected() ? `
-        <section class="ts-students-panel panel">
-          <div class="ts-list-heading">
+        <section class="panel">
+          <div class="section-heading">
             <div>
               <h2>Enrolled students</h2>
-              <p>
-                Student information for ${h(selected().name)}.
-              </p>
+              <p>${h(selected().name)}</p>
             </div>
+
+            <span class="badge">
+              ${roster().length} students
+            </span>
           </div>
 
           ${table(
             [
               "Student",
               "Student ID",
-              "Email address",
-              "Registered",
+              "Email",
+              "Department / semester",
               "Account"
             ],
-            roster().map(student => `
+            roster().map(item => `
               <tr data-search="${find([
-                student.name,
-                student.student_no,
-                student.email,
-                student.semester,
-                student.department
+                item.name,
+                item.student_no,
+                item.email,
+                item.department,
+                item.semester
               ])}">
+                <td><strong>${h(item.name)}</strong></td>
+                <td>${h(item.student_no || "—")}</td>
+                <td>${h(item.email || "—")}</td>
                 <td>
-                  <div class="ts-person">
-                    <span class="ts-avatar">
-                      ${h((student.name || "S").slice(0, 1))}
-                    </span>
-                    <strong>${h(student.name)}</strong>
-                  </div>
+                  ${h(item.department || "—")}
+                  <small>${h(item.semester)}</small>
                 </td>
-
                 <td>
-                  <span class="ts-student-id">
-                    ${h(student.student_no || "—")}
-                  </span>
-                </td>
-
-                <td>${h(student.email)}</td>
-
-                <td>
-                  ${h(
-                    stamp(student.created_at)
-                      ?.toISOString().slice(0, 10) || "—"
-                  )}
-                </td>
-
-                <td>
-                  <span class="ts-status ${
-                    student.active ? "is-active" : "is-disabled"
-                  }">
-                    ${student.active ? "Active" : "Disabled"}
+                  <span
+                    class="status ${
+                      item.active ? "present" : "absent"
+                    }"
+                  >
+                    ${item.active ? "Active" : "Disabled"}
                   </span>
                 </td>
               </tr>
             `)
           )}
         </section>
-      ` : ""}
+      ` : `
+        <section class="panel empty-state">
+          Select a classroom to view its students.
+        </section>
+      `}
     </div>
   `;
 }
 
+/* Marks */
+
 function marksPage() {
   const classroom = selected();
-  const students = roster();
   const keys = ["assessment", "mid", "final"];
 
   return `
-    <div class="tm-page">
+    <div>
       ${heading(
         "tm",
         "Student Marks",
-        "Manage assessment, midterm and final marks."
+        "Enter assessment, midterm and final marks."
       )}
 
       ${picker("tm")}
 
       ${classroom ? `
-        <section class="tm-marks-panel panel">
-          <h2>Student marks</h2>
-          <p>Leave an ungraded mark blank.</p>
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Marks register</h2>
+              <p>
+                Leave ungraded marks blank.
+                Each row is saved separately.
+              </p>
+            </div>
+          </div>
 
-          <div class="tm-limits">
-            ${keys.map(name => `
-              <span>
-                ${name}
-                <strong>${h(classroom.limits[name])}</strong>
+          <div class="badge-row">
+            ${keys.map(key => `
+              <span class="badge">
+                ${key}: ${h(classroom.limits[key])}
               </span>
             `).join("")}
 
-            <span>
-              Total
-              <strong>
-                ${keys.reduce(
-                  (sum, name) =>
-                    sum + Number(classroom.limits[name]),
+            <span class="badge">
+              Total:
+              ${
+                keys.reduce(
+                  (sum, key) =>
+                    sum + Number(classroom.limits[key]),
                   0
-                )}
-              </strong>
+                )
+              }
             </span>
           </div>
 
-          ${students.map(student => `
+          ${roster().map(item => `
             <form
-              id="mark-${h(student.id)}"
+              id="mark-${h(item.id)}"
               data-kind="marks"
-              data-student="${h(student.id)}"
+              data-student="${h(item.id)}"
             ></form>
           `).join("")}
 
@@ -834,15 +598,30 @@ function marksPage() {
               "Assessment",
               "Midterm",
               "Final",
-              "Total",
+              "Saved total",
               "Action"
             ],
-
-            students.map(student => {
-              const marks = state.marks.find(record =>
-                record.class_id === cid &&
-                record.student_id === student.id
+            roster().map(student => {
+              const saved = state.marks.find(item =>
+                item.class_id === cid &&
+                item.student_id === student.id
               ) || {};
+
+              const draft = marksDrafts.get(
+                JSON.stringify([cid, student.id])
+              ) || saved;
+
+              const total = keys.every(
+                key => saved[key] != null
+              )
+                ? Math.round(
+                    keys.reduce(
+                      (sum, key) =>
+                        sum + Number(saved[key]),
+                      0
+                    ) * 100
+                  ) / 100
+                : "Incomplete";
 
               return `
                 <tr data-search="${find([
@@ -850,55 +629,39 @@ function marksPage() {
                   student.student_no
                 ])}">
                   <td>
-                    <div class="tm-person">
-                      <span class="tm-avatar">
-                        ${h((student.name || "S").slice(0, 1))}
-                      </span>
-                      <div>
-                        <strong>${h(student.name)}</strong>
-                        <small>${h(student.student_no)}</small>
-                      </div>
-                    </div>
+                    <strong>${h(student.name)}</strong>
+                    <small>${h(student.student_no)}</small>
                   </td>
 
-                  ${keys.map(name => `
+                  ${keys.map(key => `
                     <td>
                       <input
-                        class="tm-score-input"
-                        name="${name}"
+                        class="score-input"
+                        name="${key}"
                         type="number"
                         min="0"
-                        max="${h(classroom.limits[name])}"
+                        max="${h(classroom.limits[key])}"
                         step="any"
+                        value="${h(draft[key] ?? "")}"
                         placeholder="—"
-                        value="${h(marks[name] ?? "")}"
                         form="mark-${h(student.id)}"
-                        aria-label="${name} for ${h(student.name)}"
+                        aria-label="${key} for ${h(student.name)}"
                         ${student.active ? "" : "disabled"}
                       >
                     </td>
                   `).join("")}
 
-                  <td class="tm-score-total">
-                    ${keys.every(name => marks[name] != null)
-                      ? h(Math.round(
-                          keys.reduce(
-                            (sum, name) =>
-                              sum + Number(marks[name]),
-                            0
-                          ) * 100
-                        ) / 100)
-                      : "Incomplete"}
-                  </td>
+                  <td><strong>${h(total)}</strong></td>
 
                   <td>
                     <button
-                      class="tm-save"
                       type="submit"
                       form="mark-${h(student.id)}"
-                      ${student.active
-                        ? ""
-                        : "disabled data-locked"}
+                      ${
+                        student.active
+                          ? ""
+                          : "disabled data-locked"
+                      }
                     >
                       Save
                     </button>
@@ -908,64 +671,641 @@ function marksPage() {
             })
           )}
         </section>
-      ` : ""}
+      ` : `
+        <section class="panel empty-state">
+          Select a classroom to enter marks.
+        </section>
+      `}
     </div>
   `;
 }
 
-function sessionForm(prefix) {
+/* Notices */
+
+function noticeCards(items, sent = false) {
+  return items.map(item => {
+    const date = stamp(item.created_at);
+
+    const when = date
+      ? new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Shanghai",
+          dateStyle: "medium",
+          timeStyle: "short"
+        }).format(date)
+      : "Date unavailable";
+
+    return `
+      <details
+        class="notice-card"
+        data-search="${find([
+          item.title,
+          item.body,
+          item.author_name
+        ])}"
+      >
+        <summary>${h(item.title)}</summary>
+
+        <small>
+          ${
+            h(
+              sent
+                ? "Sent notice"
+                : item.author_name || "Campus"
+            )
+          }
+          · ${h(when)}
+        </small>
+
+        <div class="notice-body">${h(item.body)}</div>
+      </details>
+    `;
+  }).join("") || `
+    <div class="empty-state">No notices yet.</div>
+  `;
+}
+
+function noticesPage() {
+  return `
+    <div>
+      ${heading(
+        "tn",
+        "Notices",
+        "Read campus updates and send notices to your classes."
+      )}
+
+      <div class="notice-layout">
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Send a notice</h2>
+              <p>Choose who should receive your message.</p>
+            </div>
+          </div>
+
+          <form data-kind="notice">
+            <label>
+              Send to
+
+              <select
+                id="tn-audience"
+                name="audience"
+                required
+              >
+                <option value="">Choose recipients</option>
+                <option value="admin">Admin</option>
+                <option value="class">A class / section</option>
+                <option value="students">Selected students</option>
+              </select>
+            </label>
+
+            <div id="tn-class-field" hidden>
+              <label>
+                Class / section
+
+                <select name="class_id">
+                  <option value="">Select your class</option>
+
+                  ${state.classes.map(item => `
+                    <option value="${h(item.id)}">
+                      ${h(item.code + " — " + item.name)}
+                    </option>
+                  `).join("")}
+                </select>
+              </label>
+            </div>
+
+            <fieldset id="tn-student-field" hidden>
+              <legend>Select students</legend>
+
+              <div class="recipient-list">
+                ${state.students
+                  .filter(item => item.active)
+                  .map(item => `
+                    <label class="checkbox-row">
+                      <input
+                        type="checkbox"
+                        name="student_ids"
+                        value="${h(item.id)}"
+                      >
+
+                      <span>
+                        ${h(item.name)}
+                        <small>${h(item.student_no)}</small>
+                      </span>
+                    </label>
+                  `).join("") || `
+                    <p>No eligible students.</p>
+                  `}
+              </div>
+            </fieldset>
+
+            <label class="checkbox-row">
+              <input type="checkbox" name="also_admin">
+              <span>Also send to Admin</span>
+            </label>
+
+            ${input(
+              "Notice title",
+              "title",
+              "",
+              "text",
+              'required maxlength="140"'
+            )}
+
+            <label>
+              Message
+
+              <textarea
+                name="body"
+                maxlength="5000"
+                rows="7"
+                required
+                placeholder="Write your notice…"
+              ></textarea>
+            </label>
+
+            <div class="form-footer">
+              <button type="submit">
+                Send notice →
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <div>
+          <section class="panel">
+            <div class="section-heading">
+              <h2>Received notices</h2>
+              <span class="badge">
+                ${state.received.length}
+              </span>
+            </div>
+
+            ${noticeCards(state.received)}
+          </section>
+
+          <section class="panel">
+            <div class="section-heading">
+              <h2>Sent notices</h2>
+              <span class="badge">
+                ${state.sent.length}
+              </span>
+            </div>
+
+            ${noticeCards(state.sent, true)}
+          </section>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* Teacher work attendance */
+
+function myAttendance() {
+  const record = state.work.find(
+    item => item.work_date === state.today
+  );
+
+  const done = record?.check_out != null;
+
+  return `
+    <div>
+      ${heading(
+        "ma",
+        "My Attendance",
+        "Record your workday and review recent check-ins."
+      )}
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Today's workday</h2>
+            <p>${h(state.today)}</p>
+          </div>
+
+          <span class="status ${done ? "present" : "neutral"}">
+            ${
+              done
+                ? "Completed"
+                : record
+                  ? "Working"
+                  : "Not checked in"
+            }
+          </span>
+        </div>
+
+        <div class="overview-grid">
+          ${[
+            ["Check-in", time(record?.check_in)],
+            ["Check-out", time(record?.check_out)],
+            ["Duration", duration(record)]
+          ].map(([label, value]) => `
+            <article class="metric">
+              <span>${label}</span>
+              <strong class="time-value">
+                ${h(value)}
+              </strong>
+            </article>
+          `).join("")}
+        </div>
+
+        <div class="form-footer">
+          <p>
+            ${
+              done
+                ? "Your workday is complete."
+                : record
+                  ? "Check out when your workday ends."
+                  : "Check in to start your workday."
+            }
+          </p>
+
+          <div class="button-row">
+            <button
+              type="button"
+              data-action="check-in"
+              ${record ? "disabled data-locked" : ""}
+            >
+              Check in
+            </button>
+
+            <button
+              type="button"
+              class="secondary"
+              data-action="check-out"
+              ${!record || done ? "disabled data-locked" : ""}
+            >
+              Check out
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Recent work attendance</h2>
+        </div>
+
+        ${table(
+          ["Date", "Check-in", "Check-out", "Duration"],
+          state.work.map(item => `
+            <tr>
+              <td>${h(item.work_date)}</td>
+              <td>${h(time(item.check_in))}</td>
+              <td>${h(time(item.check_out))}</td>
+              <td>${h(duration(item))}</td>
+            </tr>
+          `)
+        )}
+      </section>
+    </div>
+  `;
+}
+
+/* Profile */
+
+function profilePage() {
+  return `
+    <div>
+      ${heading(
+        "tp",
+        "Teacher Profile",
+        "Manage your personal information and account security."
+      )}
+
+      <section class="panel profile-banner">
+        <span class="profile-avatar">
+          ${h((profile.name || "T").slice(0, 1))}
+        </span>
+
+        <div>
+          <span class="eyebrow">TEACHER ACCOUNT</span>
+          <h2>${h(profile.name)}</h2>
+          <p>${h(profile.email)}</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Personal information</h2>
+            <p>
+              Your email address is managed by the administrator.
+            </p>
+          </div>
+        </div>
+
+        <form data-kind="profile">
+          <div class="form-grid">
+            ${input(
+              "Full name", "name", profile.name,
+              "text", 'required maxlength="100"'
+            )}
+
+            ${input(
+              "Email address", "email", profile.email,
+              "email", "readonly"
+            )}
+
+            ${input(
+              "Phone number", "phone", profile.phone,
+              "tel", 'maxlength="150"'
+            )}
+
+            ${input(
+              "Department", "department", profile.department,
+              "text", 'maxlength="150"'
+            )}
+
+            ${input(
+              "Designation", "designation", profile.designation,
+              "text", 'maxlength="150"'
+            )}
+          </div>
+
+          <div class="form-footer">
+            <button type="submit">
+              Save profile →
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Change password</h2>
+            <p>
+              Confirm your current password to choose a new one.
+            </p>
+          </div>
+        </div>
+
+        <form data-kind="password">
+          <div class="form-grid">
+            ${input(
+              "Current password",
+              "current_password",
+              "",
+              "password",
+              'required autocomplete="current-password"'
+            )}
+
+            ${input(
+              "New password",
+              "new_password",
+              "",
+              "password",
+              'required minlength="8" maxlength="128" autocomplete="new-password"'
+            )}
+
+            ${input(
+              "Confirm new password",
+              "confirm_password",
+              "",
+              "password",
+              'required minlength="8" maxlength="128" autocomplete="new-password"'
+            )}
+          </div>
+
+          <div class="form-footer">
+            <p>
+              Sign in again after changing your password.
+            </p>
+
+            <button type="submit">
+              Change password →
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+/* Dashboard */
+
+function dashboard() {
+  const lessons = state.lessons
+    .filter(item => item.lesson_date === state.today)
+    .sort((a, b) =>
+      a.start_time.localeCompare(b.start_time)
+    );
+
+  const students = new Set(
+    state.enrolments
+      .filter(item => item.active !== false)
+      .map(item => item.student_id)
+  );
+
+  return `
+    <div class="td-dashboard">
+      <header class="page-intro">
+        <div>
+          <span class="eyebrow">YOUR TEACHING DAY</span>
+          <h1>Welcome back, ${h(profile.name)}.</h1>
+          <p>
+            Your classes, students and updates in one workspace.
+          </p>
+        </div>
+
+        <a class="button secondary" href="#my-attendance">
+          My attendance →
+        </a>
+      </header>
+
+      <div class="overview-grid">
+        ${[
+          ["Assigned classes", state.classes.length],
+          ["Enrolled students", students.size],
+          ["Sessions today", lessons.length]
+        ].map(([label, value]) => `
+          <article class="metric">
+            <span>${label}</span>
+            <strong>${value}</strong>
+          </article>
+        `).join("")}
+      </div>
+
+      <div class="dashboard-grid">
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Today's sessions</h2>
+              <p>${h(state.today)}</p>
+            </div>
+
+            <a
+              class="text-link"
+              href="${h(url(
+                "attendance",
+                cid,
+                "",
+                state.today,
+                "sessions"
+              ))}"
+            >
+              Manage sessions →
+            </a>
+          </div>
+
+          ${lessons.map(item => `
+            <a
+              class="session-row"
+              href="${h(url(
+                "attendance",
+                item.class_id,
+                item.id,
+                item.lesson_date
+              ))}"
+            >
+              <span class="session-time">
+                ${h(item.start_time)}
+                <small>${h(item.end_time)}</small>
+              </span>
+
+              <span class="session-copy">
+                <strong>
+                  ${
+                    h(
+                      state.classes.find(
+                        c => c.id === item.class_id
+                      )?.name || "Class session"
+                    )
+                  }
+                </strong>
+
+                <small>
+                  ${h(item.topic || "Class session")}
+                  · ${h(item.room || "Room not set")}
+                </small>
+              </span>
+
+              <span class="text-link">Attendance →</span>
+            </a>
+          `).join("") || `
+            <div class="empty-state">
+              No sessions scheduled for today.
+              Open Student Attendance to schedule a session.
+            </div>
+          `}
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Campus updates</h2>
+              <p>Latest notices</p>
+            </div>
+
+            <a class="text-link" href="#notices">
+              View all →
+            </a>
+          </div>
+
+          ${state.received.slice(0, 3).map(item => `
+            <a class="notice-preview" href="#notices">
+              <strong>${h(item.title)}</strong>
+
+              <p>
+                ${h(String(item.body || "").slice(0, 125))}
+                ${String(item.body || "").length > 125 ? "…" : ""}
+              </p>
+
+              <small>
+                ${h(item.author_name || "Campus Office")}
+              </small>
+            </a>
+          `).join("") || `
+            <div class="empty-state">
+              No campus updates yet.
+            </div>
+          `}
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Your classrooms</h2>
+            <p>Open a class to view its students.</p>
+          </div>
+        </div>
+
+        <div class="class-grid">
+          ${state.classes.map(item => `
+            <a
+              class="class-card"
+              href="${h(url("students", item.id))}"
+              data-search="${find([
+                item.code,
+                item.name,
+                item.semester
+              ])}"
+            >
+              <span class="badge">${h(item.code)}</span>
+              <h3>${h(item.name)}</h3>
+              <p>${h(item.semester)}</p>
+              <span class="text-link">View students →</span>
+            </a>
+          `).join("") || `
+            <div class="empty-state">
+              No classes assigned yet.
+            </div>
+          `}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+/* Sessions and attendance calculations */
+
+function sessionForm() {
   return `
     <form data-kind="lesson">
-      <div class="${prefix}-picker-grid form-grid">
+      <div class="form-grid">
         ${input(
-          "Date",
-          "lesson_date",
+          "Date", "lesson_date",
           selectedDate || state.today,
-          "date",
-          "required"
+          "date", "required"
         )}
 
         ${input(
-          "Start time",
-          "start_time",
-          "",
-          "time",
-          "required"
+          "Room", "room", "",
+          "text", 'maxlength="100"'
         )}
 
         ${input(
-          "End time",
-          "end_time",
-          "",
-          "time",
-          "required"
+          "Start time", "start_time", "",
+          "time", "required"
         )}
 
         ${input(
-          "Room",
-          "room",
-          "",
-          "text",
-          'maxlength="100"'
+          "End time", "end_time", "",
+          "time", "required"
         )}
 
         ${input(
-          "Topic",
-          "topic",
-          "",
-          "text",
-          'maxlength="200"'
+          "Topic", "topic", "",
+          "text", 'maxlength="200"'
         )}
       </div>
 
-      <button type="submit" class="${prefix}-button">
-        Schedule class session →
-      </button>
+      <div class="form-footer">
+        <p>Choose a start and end time for this class.</p>
+        <button type="submit">Schedule session →</button>
+      </div>
     </form>
   `;
 }
 
-function attendanceReport(data, classId, now = new Date()) {
+function attendanceReport(
+  data,
+  classId,
+  now = new Date()
+) {
   const clock = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Shanghai",
     hour: "2-digit",
@@ -974,33 +1314,30 @@ function attendanceReport(data, classId, now = new Date()) {
   }).format(now);
 
   const accounts = new Map(
-    data.students.map(student => [
-      student.id,
-      student
-    ])
+    data.students.map(item => [item.id, item])
   );
 
-  const enrolments = new Map(
+  const enrolled = new Map(
     data.enrolments
-      .filter(record =>
-        record.class_id === classId &&
-        record.active !== false
+      .filter(item =>
+        item.class_id === classId &&
+        item.active !== false
       )
-      .map(record => [
-        record.student_id,
-        record
-      ])
+      .map(item => [item.student_id, item])
   );
 
   const lessons = data.lessons
-    .filter(lesson => lesson.class_id === classId)
+    .filter(item =>
+      item.class_id === classId &&
+      item.cancelled !== true
+    )
     .sort((a, b) =>
       b.lesson_date.localeCompare(a.lesson_date) ||
       b.start_time.localeCompare(a.start_time)
     );
 
   const lessonIds = new Set(
-    lessons.map(lesson => lesson.id)
+    lessons.map(item => item.id)
   );
 
   const saved = new Map();
@@ -1022,25 +1359,26 @@ function attendanceReport(data, classId, now = new Date()) {
       .set(record.student_id, record);
   }
 
-  const activeStudents = [...enrolments.keys()]
+  const activeStudents = [...enrolled.keys()]
     .map(uid => accounts.get(uid))
-    .filter(student => student?.active === true);
+    .filter(item => item?.active === true);
 
   function studentsOn(date) {
-    return activeStudents.filter(student =>
+    return activeStudents.filter(item =>
       (
-        enrolments.get(student.id).joined_on ||
+        enrolled.get(item.id).joined_on ||
         "0000-01-01"
       ) <= date
     );
   }
 
   function forLesson(lesson) {
-    const records = saved.get(lesson.id) || new Map();
+    const records =
+      saved.get(lesson.id) || new Map();
 
     const eligible = new Set(
       studentsOn(lesson.lesson_date)
-        .map(student => student.id)
+        .map(item => item.id)
     );
 
     const ids = new Set([
@@ -1050,8 +1388,8 @@ function attendanceReport(data, classId, now = new Date()) {
 
     const counts = {
       Present: 0,
-      Absent: 0,
       Late: 0,
+      Absent: 0,
       Excused: 0,
       "Not marked": 0
     };
@@ -1059,13 +1397,15 @@ function attendanceReport(data, classId, now = new Date()) {
     const students = [...ids]
       .map(uid => {
         const account = accounts.get(uid);
-        const record = records.get(uid);
+        const candidate = records.get(uid)?.status;
 
-        const status = Object.hasOwn(
-          counts,
-          record?.status
-        )
-          ? record.status
+        const status = [
+          "Present",
+          "Late",
+          "Absent",
+          "Excused"
+        ].includes(candidate)
+          ? candidate
           : "Not marked";
 
         counts[status]++;
@@ -1104,9 +1444,7 @@ function attendanceReport(data, classId, now = new Date()) {
   }
 
   function stage(lesson) {
-    if (ended(lesson)) {
-      return "Completed";
-    }
+    if (ended(lesson)) return "Past session";
 
     if (
       lesson.lesson_date === data.today &&
@@ -1118,17 +1456,74 @@ function attendanceReport(data, classId, now = new Date()) {
     return "Upcoming";
   }
 
+  const past = lessons.filter(ended);
+
+  // A timetable entry alone is not proof that a class was held.
+  const recorded = past.filter(item => {
+    const counts = forLesson(item).counts;
+
+    return (
+      counts.Present +
+      counts.Late +
+      counts.Absent +
+      counts.Excused
+    ) > 0;
+  });
+
+  const cumulative = new Map();
+
+  for (const lesson of recorded) {
+    for (const student of forLesson(lesson).students) {
+      if (!cumulative.has(student.id)) {
+        cumulative.set(student.id, {
+          ...student,
+          total: 0,
+          Present: 0,
+          Late: 0,
+          Absent: 0,
+          Excused: 0,
+          "Not marked": 0
+        });
+      }
+
+      const item = cumulative.get(student.id);
+
+      item.total++;
+      item[student.status]++;
+    }
+  }
+
+  for (const student of activeStudents) {
+    if (!cumulative.has(student.id)) {
+      cumulative.set(student.id, {
+        ...student,
+        total: 0,
+        Present: 0,
+        Late: 0,
+        Absent: 0,
+        Excused: 0,
+        "Not marked": 0
+      });
+    }
+  }
+
   return {
     lessons,
-    held: lessons.filter(ended),
+    past,
+    recorded,
+    pending: past.length - recorded.length,
     activeStudents,
     studentsOn,
     forLesson,
-    stage
+    stage,
+    students: [...cumulative.values()]
+      .sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
   };
 }
 
-function classSessionCards(classroom, lessons, report) {
+function sessionCards(classroom, lessons, report) {
   return lessons.map(lesson => {
     const summary = report.forLesson(lesson);
 
@@ -1136,23 +1531,22 @@ function classSessionCards(classroom, lessons, report) {
       summary.total -
       summary.counts["Not marked"];
 
-    const progress = marked === 0
-      ? "Attendance not marked"
-      : summary.counts["Not marked"] > 0
-        ? `Attendance partial · ${marked}/${summary.total}`
-        : `Attendance saved · ${marked}/${summary.total}`;
-
     return `
       <a
-        class="tc-session"
+        class="session-row"
         href="${h(url(
           "attendance",
           classroom.id,
           lesson.id,
           lesson.lesson_date
         ))}"
+        data-search="${find([
+          classroom.name,
+          lesson.lesson_date,
+          lesson.topic
+        ])}"
       >
-        <span class="tc-date-tile">
+        <span class="date-tile">
           <strong>
             ${h(lesson.lesson_date.slice(8))}
           </strong>
@@ -1162,185 +1556,297 @@ function classSessionCards(classroom, lessons, report) {
           </small>
         </span>
 
-        <span class="tc-session-info">
+        <span class="session-copy">
           <strong>
-            ${h(classroom.name)}
+            ${h(lesson.topic || classroom.name)}
           </strong>
 
           <small>
-            ${h(lesson.lesson_date)}
-            · ${h(lesson.start_time)}–${h(lesson.end_time)}
+            ${h(lesson.start_time)}–${h(lesson.end_time)}
             · ${h(lesson.room || "Room not set")}
           </small>
 
-          ${
-            lesson.topic
-              ? `<small>${h(lesson.topic)}</small>`
-              : ""
-          }
-
-          <span class="tc-session-badges">
-            <span class="tc-session-stage">
+          <span class="badge-row">
+            <span class="badge">
               ${h(report.stage(lesson))}
             </span>
 
-            <span class="tc-session-progress">
-              ${h(progress)}
+            <span class="badge">
+              ${
+                marked
+                  ? `${marked}/${summary.total} marked`
+                  : "Attendance pending"
+              }
             </span>
           </span>
         </span>
 
-        <span class="tc-attendance-link">
-          Take attendance →
+        <span class="text-link">
+          ${
+            lesson.lesson_date > state.today
+              ? "View"
+              : "Attendance"
+          } →
         </span>
       </a>
     `;
   }).join("") || `
-    <p class="empty">
-      No sessions scheduled.
-    </p>
-  `;
-}
-
-function classesPage() {
-  const classroom = selected();
-
-  const report = classroom
-    ? attendanceReport(state, cid)
-    : null;
-
-  return `
-    <div class="tc-page">
-      ${heading(
-        "tc",
-        "Daily Classes",
-        "Your weekly routine and scheduled class sessions."
-      )}
-
-      <section class="tc-panel panel">
-        <h2>Weekly Class Schedule</h2>
-
-        <div class="tc-weekly-grid">
-          ${state.classes.map(item => `
-            <article
-              class="tc-class-card"
-              data-search="${find([
-                item.code,
-                item.name,
-                item.semester
-              ])}"
-            >
-              <div class="tc-card-top">
-                <span class="tc-code">
-                  ${h(item.code)}
-                </span>
-              </div>
-
-              <h3>${h(item.name)}</h3>
-
-              <p class="tc-semester">
-                ${h(item.semester)}
-              </p>
-
-              <div class="tc-routine">
-                ${(item.weekly_slots || [])
-                  .map(slot => `
-                    <div class="tc-routine-line">
-                      ◷ ${h(days[slot.day])}
-                      ${h(slot.start)}–${h(slot.end)}
-                      ${h(slot.room)}
-                    </div>
-                  `)
-                  .join("") || `
-                    <p>Weekly time not set.</p>
-                  `}
-              </div>
-
-              <a
-                class="tc-open-class"
-                href="${h(url(
-                  "classes",
-                  item.id
-                ))}"
-              >
-                Open class →
-              </a>
-            </article>
-          `).join("") || `
-            <p class="empty">
-              No classes assigned yet.
-            </p>
-          `}
-        </div>
-      </section>
-
-      ${picker("tc")}
-
-      ${classroom ? `
-        <section class="tc-panel panel">
-          <h2>Today's and upcoming sessions</h2>
-
-          <div class="tc-session-list">
-            ${classSessionCards(
-              classroom,
-              report.lessons
-                .filter(lesson =>
-                  lesson.lesson_date >= state.today
-                )
-                .sort((a, b) =>
-                  a.lesson_date.localeCompare(
-                    b.lesson_date
-                  ) ||
-                  a.start_time.localeCompare(
-                    b.start_time
-                  )
-                ),
-              report
-            )}
-          </div>
-        </section>
-
-        <section class="tc-panel panel">
-          <h2>Schedule a class session</h2>
-
-          ${sessionForm("tc")}
-        </section>
-
-        <section class="tc-panel panel">
-          <h2>Session history</h2>
-
-          <p class="tc-session-note">
-            Earlier dates, with saved attendance status.
-          </p>
-
-          <div class="tc-session-list">
-            ${classSessionCards(
-              classroom,
-              report.lessons.filter(lesson =>
-                lesson.lesson_date < state.today
-              ),
-              report
-            )}
-          </div>
-        </section>
-      ` : ""}
+    <div class="empty-state">
+      No sessions in this list.
     </div>
   `;
 }
 
-function attendancePage() {
-  const classroom = selected();
-  const report = attendanceReport(state, cid);
+function attendanceSessions(classroom, report) {
+  return `
+    <div class="classroom-grid">
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Schedule a session</h2>
+            <p>
+              Create a session, then record its attendance.
+            </p>
+          </div>
+        </div>
 
+        ${sessionForm()}
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Weekly routine</h2>
+            <p>${h(classroom.name)}</p>
+          </div>
+
+          <span class="badge">
+            ${h(classroom.semester)}
+          </span>
+        </div>
+
+        <div class="routine-list">
+          ${(classroom.weekly_slots || [])
+            .map(slot => `
+              <div class="routine-row">
+                <strong>${h(days[slot.day])}</strong>
+                <span>
+                  ${h(slot.start)}–${h(slot.end)}
+                </span>
+                <small>
+                  ${h(slot.room || "Room not set")}
+                </small>
+              </div>
+            `).join("") || `
+              <div class="empty-state">
+                No weekly routine assigned yet.
+              </div>
+            `}
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Today & upcoming</h2>
+          <p>Your scheduled class sessions.</p>
+        </div>
+      </div>
+
+      ${sessionCards(
+        classroom,
+        report.lessons
+          .filter(item =>
+            item.lesson_date >= state.today
+          )
+          .sort((a, b) =>
+            a.lesson_date.localeCompare(b.lesson_date) ||
+            a.start_time.localeCompare(b.start_time)
+          ),
+        report
+      )}
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Session history</h2>
+          <p>
+            Open a session to review saved attendance.
+          </p>
+        </div>
+      </div>
+
+      ${sessionCards(
+        classroom,
+        report.lessons.filter(item =>
+          item.lesson_date < state.today
+        ),
+        report
+      )}
+    </section>
+  `;
+}
+
+function attendanceReports(classroom, report) {
+  return `
+    <div class="overview-grid">
+      <article class="metric">
+        <span>Classes with attendance</span>
+        <strong>${report.recorded.length}</strong>
+      </article>
+
+      <article class="metric">
+        <span>Past sessions awaiting attendance</span>
+        <strong>${report.pending}</strong>
+      </article>
+
+      <article class="metric">
+        <span>Currently enrolled</span>
+        <strong>${report.activeStudents.length}</strong>
+      </article>
+    </div>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Student attendance totals</h2>
+          <p>
+            ${h(classroom.name)} · One row per student
+          </p>
+        </div>
+      </div>
+
+      <p class="info-note">
+        Totals include past classes with saved attendance,
+        from each student's joining date.
+        Attended = Present + Late.
+        Unmarked attendance and excused leave are
+        separate from Absent.
+      </p>
+
+      ${table(
+        [
+          "Student",
+          "Student ID",
+          "Total classes",
+          "Attended",
+          "Absent",
+          "Excused",
+          "Not marked"
+        ],
+        report.students.map(item => `
+          <tr data-search="${find([
+            item.name,
+            item.student_no
+          ])}">
+            <td><strong>${h(item.name)}</strong></td>
+            <td>${h(item.student_no || "—")}</td>
+            <td>${item.total}</td>
+
+            <td>
+              <span class="status present">
+                ${item.Present + item.Late}
+              </span>
+
+              <small>
+                ${item.Present} present · ${item.Late} late
+              </small>
+            </td>
+
+            <td>
+              <span class="status absent">
+                ${item.Absent}
+              </span>
+            </td>
+
+            <td>${item.Excused}</td>
+            <td>${item["Not marked"]}</td>
+          </tr>
+        `)
+      )}
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Session attendance report</h2>
+          <p>
+            Attendance for each past scheduled session.
+          </p>
+        </div>
+      </div>
+
+      ${table(
+        [
+          "Date / session",
+          "Students",
+          "Attended",
+          "Absent",
+          "Excused",
+          "Not marked",
+          "Action"
+        ],
+        report.past.map(item => {
+          const totals = report.forLesson(item);
+
+          return `
+            <tr data-search="${find([
+              item.lesson_date,
+              item.topic
+            ])}">
+              <td>
+                <strong>${h(item.lesson_date)}</strong>
+                <small>
+                  ${h(item.start_time)}–${h(item.end_time)}
+                </small>
+              </td>
+
+              <td>${totals.total}</td>
+
+              <td>
+                ${
+                  totals.counts.Present +
+                  totals.counts.Late
+                }
+              </td>
+
+              <td>${totals.counts.Absent}</td>
+              <td>${totals.counts.Excused}</td>
+              <td>${totals.counts["Not marked"]}</td>
+
+              <td>
+                <a
+                  class="text-link"
+                  href="${h(url(
+                    "attendance",
+                    cid,
+                    item.id,
+                    item.lesson_date
+                  ))}"
+                >
+                  Open →
+                </a>
+              </td>
+            </tr>
+          `;
+        })
+      )}
+    </section>
+  `;
+}
+
+function attendanceTake(classroom, report) {
   const lessons = report.lessons
-    .filter(lesson =>
-      lesson.lesson_date === selectedDate
+    .filter(item =>
+      item.lesson_date === selectedDate
     )
     .sort((a, b) =>
       a.start_time.localeCompare(b.start_time)
     );
 
-  if (!lessons.some(lesson => lesson.id === lid)) {
+  if (!lessons.some(item => item.id === lid)) {
     lid = lessons.length === 1
       ? lessons[0].id
       : "";
@@ -1358,176 +1864,125 @@ function attendancePage() {
     !!lesson &&
     selectedDate <= state.today;
 
-  const students = summary?.students || [];
-
   return `
-    <div class="ta-page">
-      ${heading(
-        "ta",
-        "Student Attendance",
-        "Select your classroom, date and session to record attendance."
-      )}
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Choose a session</h2>
+          <p>Select the date and class time.</p>
+        </div>
+      </div>
 
-      <div class="ta-filters">
-        ${picker("ta")}
+      <div class="selection-grid">
+        <label>
+          Attendance date
 
-        <section class="ta-picker-panel panel">
-          <h2>Attendance date</h2>
+          <input
+            id="attendance-date"
+            type="date"
+            value="${h(selectedDate)}"
+            max="${h(state.today)}"
+          >
+        </label>
 
-          <label>
-            Select date
-
-            <input
-              id="attendance-date"
-              type="date"
-              value="${h(selectedDate)}"
-              max="${h(state.today)}"
-            >
-          </label>
-        </section>
-
-        <section class="ta-picker-panel panel">
-          <h2>Attendance session</h2>
-
-          <label for="lesson-select">
-            Select session
-          </label>
+        <label>
+          Attendance session
 
           <select
             id="lesson-select"
-            aria-label="Attendance session"
-            ${
-              !classroom || !lessons.length
-                ? "disabled"
-                : ""
-            }
+            ${lessons.length ? "" : "disabled"}
           >
-            <option value="">
-              — Select a session —
-            </option>
+            <option value="">Select a session</option>
 
             ${lessons.map(item => `
               <option
                 value="${h(item.id)}"
                 ${item.id === lid ? "selected" : ""}
               >
-                ${h(
-                  item.start_time +
-                  "–" +
-                  item.end_time +
-                  " · " +
-                  (item.topic || "Class session")
-                )}
+                ${h(item.start_time)}–${h(item.end_time)}
+                · ${h(item.topic || "Class session")}
               </option>
             `).join("")}
           </select>
-
-          <div class="ta-session-help">
-            <p>
-              ${
-                !classroom
-                  ? "Choose your classroom first."
-                  : !lessons.length
-                    ? "No sessions scheduled for this date."
-                    : "Choose the class session whose attendance you want to record."
-              }
-            </p>
-
-            ${classroom ? `
-              <a
-                class="ta-manage-link"
-                href="${h(url(
-                  "classes",
-                  cid,
-                  "",
-                  selectedDate
-                ))}"
-              >
-                Schedule a session in Daily Classes →
-              </a>
-            ` : ""}
-          </div>
-        </section>
+        </label>
       </div>
 
-      <section class="ta-list-panel panel">
-        <h2>Student attendance</h2>
+      ${!lessons.length ? `
+        <div class="empty-state">
+          No session scheduled for this date.
+          <br>
 
-        ${summary ? `
-          <p class="ta-session-caption">
-            ${h(classroom.name)}
-            · ${h(selectedDate)}
-            · ${h(lesson.start_time)}–${h(lesson.end_time)}
-          </p>
-
-          <div
-            class="ta-session-stats"
-            aria-label="Selected session attendance totals"
+          <a
+            class="text-link"
+            href="${h(url(
+              "attendance",
+              cid,
+              "",
+              selectedDate,
+              "sessions"
+            ))}"
           >
-            ${[
-              [
-                "Total students",
-                summary.total,
-                "total"
-              ],
-              [
-                "Present",
-                summary.counts.Present,
-                "present"
-              ],
-              [
-                "Absent",
-                summary.counts.Absent,
-                "absent"
-              ],
-              [
-                "Late",
-                summary.counts.Late,
-                "late"
-              ],
-              [
-                "Excused",
-                summary.counts.Excused,
-                "excused"
-              ],
-              [
-                "Not marked",
-                summary.counts["Not marked"],
-                "unmarked"
-              ]
-            ].map(([label, count, tone]) => `
-              <div class="ta-stat ta-stat-${tone}">
-                <span>${label}</span>
-                <strong>${count}</strong>
-              </div>
-            `).join("")}
+            Schedule a session →
+          </a>
+        </div>
+      ` : ""}
+    </section>
+
+    ${summary ? `
+      <div class="attendance-metrics">
+        ${[
+          ["Students", summary.total, "neutral"],
+          [
+            "Attended",
+            summary.counts.Present +
+            summary.counts.Late,
+            "present"
+          ],
+          ["Absent", summary.counts.Absent, "absent"],
+          ["Excused", summary.counts.Excused, "excused"],
+          [
+            "Not marked",
+            summary.counts["Not marked"],
+            "neutral"
+          ]
+        ].map(([label, count, tone]) => `
+          <article class="metric ${tone}">
+            <span>${label}</span>
+            <strong>${count}</strong>
+          </article>
+        `).join("")}
+      </div>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Student attendance</h2>
+
+            <p>
+              ${h(selectedDate)}
+              · ${h(lesson.start_time)}–${h(lesson.end_time)}
+              · ${h(classroom.name)}
+            </p>
           </div>
 
-          <p class="ta-count-note">
-            Attended (Present + Late):
-            <strong>
-              ${
-                summary.counts.Present +
-                summary.counts.Late
-              }
-            </strong>.
-            Not marked is separate from Absent.
+          <span class="badge">
+            ${summary.counts.Late} late
+          </span>
+        </div>
+
+        <p class="info-note">
+          Counts show saved attendance.
+          Save each changed row.
+          Present and Late both count as attended.
+        </p>
+
+        ${!canSave ? `
+          <p class="warning-note">
+            Future attendance is read only.
           </p>
         ` : ""}
 
-        ${canSave ? "" : `
-          <p class="ta-warning">
-            ${
-              !classroom
-                ? "Choose a classroom, date and session to view students."
-                : !lesson
-                  ? "Choose an existing session above, or schedule one in Daily Classes."
-                  : "Future attendance cannot be recorded."
-            }
-          </p>
-        `}
-
-        ${students.map(student => `
+        ${summary.students.map(student => `
           <form
             id="attendance-${h(student.id)}"
             data-kind="attendance"
@@ -1543,14 +1998,18 @@ function attendancePage() {
             "Mark attendance",
             "Action"
           ],
-          students.map(student => {
+          summary.students.map(student => {
             const editable =
               canSave &&
               student.can_mark;
 
-            const statusClass =
+            const value = attendanceDrafts.get(
+              JSON.stringify([lid, student.id])
+            ) ?? student.status;
+
+            const tone =
               student.status === "Not marked"
-                ? "unmarked"
+                ? "neutral"
                 : student.status.toLowerCase();
 
             return `
@@ -1559,40 +2018,21 @@ function attendancePage() {
                 student.student_no
               ])}">
                 <td>
-                  <div class="ta-person">
-                    <span class="ta-avatar">
-                      ${
-                        h(
-                          (student.name || "S")
-                            .slice(0, 1)
-                        )
-                      }
-                    </span>
+                  <strong>${h(student.name)}</strong>
 
-                    <span class="ta-person-copy">
-                      <strong>
-                        ${h(student.name)}
-                      </strong>
-
-                      ${!student.can_mark ? `
-                        <small>
-                          Previous enrolment · read only
-                        </small>
-                      ` : ""}
-                    </span>
-                  </div>
+                  ${!student.can_mark ? `
+                    <small>
+                      Previous enrolment · read only
+                    </small>
+                  ` : ""}
                 </td>
 
                 <td>
-                  <span class="ta-student-id">
-                    ${h(student.student_no)}
-                  </span>
+                  ${h(student.student_no || "—")}
                 </td>
 
                 <td>
-                  <span
-                    class="ta-status ta-${h(statusClass)}"
-                  >
+                  <span class="status ${tone}">
                     ${h(student.status)}
                   </span>
                 </td>
@@ -1609,17 +2049,13 @@ function attendancePage() {
 
                     ${[
                       "Present",
-                      "Absent",
                       "Late",
+                      "Absent",
                       "Excused"
                     ].map(status => `
                       <option
                         value="${status}"
-                        ${
-                          student.status === status
-                            ? "selected"
-                            : ""
-                        }
+                        ${value === status ? "selected" : ""}
                       >
                         ${status}
                       </option>
@@ -1629,7 +2065,6 @@ function attendancePage() {
 
                 <td>
                   <button
-                    class="ta-save"
                     type="submit"
                     form="attendance-${h(student.id)}"
                     ${
@@ -1646,533 +2081,95 @@ function attendancePage() {
           })
         )}
       </section>
-
-      ${classroom ? `
-        <section class="ta-report-panel panel">
-          <div class="ta-report-heading">
-            <div>
-              <h2>Class attendance summary</h2>
-
-              <p>
-                ${h(classroom.code)}
-                · ${h(classroom.name)}
-                · All held sessions
-              </p>
-            </div>
-
-            <a
-              class="ta-manage-link"
-              href="${h(url("classes", cid))}"
-            >
-              Daily Classes →
-            </a>
-          </div>
-
-          <div class="ta-class-stats">
-            <div class="ta-stat">
-              <span>Total classes held</span>
-              <strong>${report.held.length}</strong>
-            </div>
-
-            <div class="ta-stat">
-              <span>Scheduled sessions</span>
-              <strong>${report.lessons.length}</strong>
-            </div>
-
-            <div class="ta-stat">
-              <span>Currently enrolled students</span>
-              <strong>
-                ${report.activeStudents.length}
-              </strong>
-            </div>
-          </div>
-
-          <p class="ta-count-note">
-            Held classes have reached their end time.
-            Upcoming sessions are excluded.
-            Each row shows attendance for that session;
-            Present and Late are shown separately.
-          </p>
-
-          ${table(
-            [
-              "Date / session",
-              "Students",
-              "Present",
-              "Late",
-              "Absent",
-              "Excused",
-              "Not marked",
-              "Action"
-            ],
-            report.held.map(item => {
-              const totals = report.forLesson(item);
-
-              return `
-                <tr
-                  class="${
-                    item.id === lid
-                      ? "ta-selected-session"
-                      : ""
-                  }"
-                  data-search="${find([
-                    item.lesson_date,
-                    item.topic
-                  ])}"
-                >
-                  <td>
-                    <strong>
-                      ${h(item.lesson_date)}
-                    </strong>
-
-                    <small>
-                      ${h(item.start_time)}–${h(item.end_time)}
-                    </small>
-
-                    ${item.topic ? `
-                      <small>${h(item.topic)}</small>
-                    ` : ""}
-                  </td>
-
-                  <td>${totals.total}</td>
-
-                  <td>
-                    <span class="ta-status ta-present">
-                      ${totals.counts.Present}
-                    </span>
-                  </td>
-
-                  <td>
-                    <span class="ta-status ta-late">
-                      ${totals.counts.Late}
-                    </span>
-                  </td>
-
-                  <td>
-                    <span class="ta-status ta-absent">
-                      ${totals.counts.Absent}
-                    </span>
-                  </td>
-
-                  <td>${totals.counts.Excused}</td>
-
-                  <td>
-                    ${totals.counts["Not marked"]}
-                  </td>
-
-                  <td>
-                    <a
-                      class="ta-manage-link"
-                      href="${h(url(
-                        "attendance",
-                        cid,
-                        item.id,
-                        item.lesson_date
-                      ))}"
-                    >
-                      View →
-                    </a>
-                  </td>
-                </tr>
-              `;
-            })
-          )}
-        </section>
-      ` : ""}
-    </div>
+    ` : `
+      <section class="panel empty-state">
+        Select a session above to view students
+        and record attendance.
+      </section>
+    `}
   `;
 }
-function myAttendance() {
-  const record = state.work.find(item =>
-    item.work_date === state.today
-  );
 
-  const done = record?.check_out != null;
+function attendancePage() {
+  const classroom = selected();
+  const report = attendanceReport(state, cid);
 
   return `
-    <div class="ma-page">
+    <div class="attendance-page">
       ${heading(
-        "ma",
-        "My Attendance",
-        "Your daily check-in, check-out and attendance history."
+        "ta",
+        "Student Attendance",
+        "Manage class sessions, record attendance and review student totals."
       )}
 
-      <section class="ma-card">
-        <div class="ma-card-heading">
-          <div>
-            <span class="ma-eyebrow">DAILY ATTENDANCE</span>
-            <h2>Today's attendance</h2>
-            <p>${h(state.today)}</p>
-          </div>
+      ${picker("ta")}
 
-          <span class="ma-badge ${
-            done ? "completed" : record ? "working" : ""
-          }">
-            ${done
-              ? "Completed"
-              : record ? "Checked in" : "Not checked in"}
-          </span>
-        </div>
-
-        <div class="ma-time-grid">
+      ${classroom ? `
+        <nav
+          class="workspace-tabs"
+          aria-label="Classroom sections"
+        >
           ${[
-            [
-              "↘",
-              "Check-in time",
-              time(record?.check_in),
-              "Start of your workday"
-            ],
-            [
-              "↗",
-              "Check-out time",
-              time(record?.check_out),
-              "End of your workday"
-            ],
-            [
-              "◷",
-              "Working duration",
-              duration(record),
-              "Calculated after check-out"
-            ]
-          ].map(([icon, label, value, description]) => `
-            <article class="ma-time-box">
-              <span class="ma-time-icon">${icon}</span>
-
-              <div>
-                <span class="ma-label">${label}</span>
-                <strong>${h(value)}</strong>
-                <small>${description}</small>
-              </div>
-            </article>
+            ["take", "Take attendance"],
+            ["sessions", "Sessions & routine"],
+            ["reports", "Student reports"]
+          ].map(([view, label]) => `
+            <a
+              href="${h(url(
+                "attendance",
+                cid,
+                view === "take" ? lid : "",
+                selectedDate,
+                view
+              ))}"
+              class="${
+                attendanceView === view ? "active" : ""
+              }"
+              ${
+                attendanceView === view
+                  ? 'aria-current="page"'
+                  : ""
+              }
+            >
+              ${label}
+            </a>
           `).join("")}
-        </div>
+        </nav>
 
-        <div class="ma-action-bar">
+        ${
+          attendanceView === "sessions"
+            ? attendanceSessions(classroom, report)
+            : attendanceView === "reports"
+              ? attendanceReports(classroom, report)
+              : attendanceTake(classroom, report)
+        }
+      ` : `
+        <section class="panel empty-state">
+          <span class="empty-icon">▦</span>
+          <h2>Choose your classroom</h2>
           <p>
-            ${done
-              ? "Your attendance has been recorded for today."
-              : record
-                ? "Check out when your workday ends."
-                : "Ready to begin? Record your check-in below."}
+            Select an assigned class to manage its sessions,
+            attendance and student reports.
           </p>
-
-          <div class="ma-actions">
-            <button
-              class="ma-button"
-              type="button"
-              data-action="check-in"
-              ${record ? "disabled data-locked" : ""}
-            >
-              ↘ Check in
-            </button>
-
-            <button
-              class="ma-button secondary"
-              type="button"
-              data-action="check-out"
-              ${!record || done ? "disabled data-locked" : ""}
-            >
-              ↗ Check out
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="ma-card ma-history">
-        <div class="ma-card-heading">
-          <div>
-            <h2>Recent attendance</h2>
-            <p>Your latest recorded working days.</p>
-          </div>
-        </div>
-
-        ${table(
-          ["Date", "Check-in", "Check-out", "Duration"],
-          state.work.map(item => `
-            <tr>
-              <td>${h(item.work_date)}</td>
-              <td>${h(time(item.check_in))}</td>
-              <td>${h(time(item.check_out))}</td>
-              <td>${h(duration(item))}</td>
-            </tr>
-          `)
-        )}
-      </section>
-    </div>
-  `;
-}
-
-function noticesPage() {
-  return `
-    <div class="tn-page">
-      <header class="tn-heading">
-        <span>TEACHER WORKSPACE</span>
-        <h1>Notice Centre</h1>
-        <p>
-          Read campus updates and share notices with your students.
-        </p>
-      </header>
-
-      <div class="tn-layout">
-
-        <section class="tn-panel">
-          <div class="tn-panel-heading">
-            <span class="tn-icon">↗</span>
-
-            <div>
-              <h2>Send a notice</h2>
-              <p>Choose your recipients before sending.</p>
-            </div>
-          </div>
-
-          <form data-kind="notice">
-
-            <label for="tn-audience">Send to</label>
-
-            <select id="tn-audience" name="audience" required>
-              <option value="">Choose recipients</option>
-              <option value="admin">Admin</option>
-              <option value="class">A class / section</option>
-              <option value="students">Selected students</option>
-            </select>
-
-            <div id="tn-class-field" hidden>
-              <label>
-                Class / section
-
-                <select name="class_id">
-                  <option value="">Select your class</option>
-
-                  ${state.classes.map(classroom => `
-                    <option value="${h(classroom.id)}">
-                      ${h(
-                        classroom.code + " — " + classroom.name
-                      )}
-                    </option>
-                  `).join("")}
-                </select>
-              </label>
-
-              <p class="tn-help">
-                Sends to the active students currently enrolled.
-              </p>
-            </div>
-
-            <fieldset id="tn-student-field" hidden>
-              <legend>Select students</legend>
-
-              <div class="tn-students">
-                ${state.students
-                  .filter(student => student.active)
-                  .map(student => `
-                    <label class="tn-student">
-                      <input
-                        type="checkbox"
-                        name="student_ids"
-                        value="${h(student.id)}"
-                      >
-
-                      <span>
-                        <strong>${h(student.name)}</strong>
-                        <small>
-                          ${h(student.student_no || "No Student ID")}
-                        </small>
-                      </span>
-                    </label>
-                  `).join("") ||
-                  '<p class="tn-help">No eligible students in your classes.</p>'}
-              </div>
-            </fieldset>
-
-            <label class="tn-student tn-also-admin">
-              <input type="checkbox" name="also_admin">
-
-              <span>
-                <strong>Also send to Admin</strong>
-                <small>
-                  Send this notice to Admin along with your selected students.
-                </small>
-              </span>
-            </label>
-
-            <label for="tn-title">Notice title</label>
-
-            <input
-              id="tn-title"
-              name="title"
-              maxlength="140"
-              placeholder="Enter a clear, short title"
-              required
-            >
-
-            <label for="tn-body">Message</label>
-
-            <textarea
-              id="tn-body"
-              name="body"
-              maxlength="5000"
-              rows="7"
-              placeholder="Write your notice here..."
-              required
-            ></textarea>
-
-            <div class="tn-form-footer">
-              <p>Delivered to selected recipients.</p>
-              <button type="submit">Send notice →</button>
-            </div>
-
-          </form>
         </section>
-
-        <div class="tn-feed">
-
-          <section class="tn-panel">
-            <div class="tn-list-heading">
-              <h2>Received notices</h2>
-              <span class="tn-count">${state.received.length}</span>
-            </div>
-
-            ${noticeCards(state.received)}
-          </section>
-
-          <section class="tn-panel">
-            <div class="tn-list-heading">
-              <h2>Sent notices</h2>
-              <span class="tn-count">${state.sent.length}</span>
-            </div>
-
-            ${noticeCards(state.sent, true)}
-          </section>
-
-        </div>
-
-      </div>
+      `}
     </div>
   `;
 }
 
-function profilePage() {
-  return `
-    <div class="tp-page">
+/* Navigation and events */
 
-      <header class="tp-heading">
-        <span>ACCOUNT SETTINGS</span>
-        <h1>Teacher Profile</h1>
-        <p>Manage your personal information and account security.</p>
-      </header>
+function identity() {
+  document.querySelectorAll("[data-teacher-name]")
+    .forEach(el => {
+      el.textContent = profile.name;
+    });
 
-      <section class="tp-profile-card">
-        <div class="tp-profile-person">
-          <span class="tp-avatar">
-            ${h((profile.name || "T").slice(0, 1))}
-          </span>
-
-          <div>
-            <span class="tp-role">TEACHER ACCOUNT</span>
-            <h2>${h(profile.name)}</h2>
-            <p>${h(profile.email)}</p>
-          </div>
-        </div>
-
-        <span class="tp-account-badge">● Teacher workspace</span>
-      </section>
-
-      <section class="tp-panel">
-        <div class="tp-section-heading">
-          <span class="tp-section-icon">◎</span>
-
-          <div>
-            <h2>Personal information</h2>
-            <p>
-              Keep your contact and professional details up to date.
-            </p>
-          </div>
-        </div>
-
-        <form data-kind="profile">
-          <div class="tp-fields">
-            ${input(
-              "Full name", "name", profile.name,
-              "text", 'required maxlength="100"'
-            )}
-
-            ${input(
-              "Email address", "email", profile.email,
-              "email", "readonly"
-            )}
-
-            ${input(
-              "Phone number", "phone", profile.phone,
-              "tel", 'maxlength="150"'
-            )}
-
-            ${input(
-              "Department", "department", profile.department,
-              "text", 'maxlength="150"'
-            )}
-
-            ${input(
-              "Designation", "designation", profile.designation,
-              "text", 'maxlength="150"'
-            )}
-          </div>
-
-          <div class="tp-form-footer">
-            <p>Your email address is managed by the administrator.</p>
-            <button class="tp-button" type="submit">
-              Save changes →
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section class="tp-panel tp-security">
-        <div class="tp-section-heading">
-          <span class="tp-section-icon">⚿</span>
-
-          <div>
-            <h2>Change password</h2>
-            <p>Choose a strong password to protect your account.</p>
-          </div>
-        </div>
-
-        <form data-kind="password">
-          <div class="tp-fields">
-            ${input(
-              "Current password", "current_password", "",
-              "password", 'required autocomplete="current-password"'
-            )}
-
-            ${input(
-              "New password", "new_password", "",
-              "password",
-              'required minlength="8" maxlength="128" autocomplete="new-password"'
-            )}
-
-            ${input(
-              "Confirm new password", "confirm_password", "",
-              "password",
-              'required minlength="8" maxlength="128" autocomplete="new-password"'
-            )}
-          </div>
-
-          <div class="tp-security-note">
-            ⓘ After changing your password, you will need to log in again.
-          </div>
-
-          <div class="tp-form-footer">
-            <button
-              class="tp-button tp-password-button"
-              type="submit"
-            >
-              Change password →
-            </button>
-          </div>
-        </form>
-      </section>
-
-    </div>
-  `;
+  document.querySelectorAll("[data-initial]")
+    .forEach(el => {
+      el.textContent =
+        (profile.name || "T").slice(0, 1).toUpperCase();
+    });
 }
 
 function render() {
@@ -2181,235 +2178,233 @@ function render() {
   const [name, query = ""] =
     location.hash.slice(1).split("?");
 
-  page = Object.hasOwn(labels, name)
-    ? name
+  const route =
+    name === "classes" ? "attendance" : name;
+
+  page = Object.hasOwn(labels, route)
+    ? route
     : "dashboard";
 
-  const parameters = new URLSearchParams(query);
+  const params = new URLSearchParams(query);
 
-  if (parameters.has("class")) {
-    cid = parameters.get("class");
+  if (params.has("class")) {
+    cid = params.get("class");
   }
 
   if (!selected()) {
-    cid = "";
+    cid = state.classes.length === 1
+      ? state.classes[0].id
+      : "";
   }
 
-  if (parameters.has("lesson")) {
-    lid = parameters.get("lesson");
+  if (params.has("lesson")) {
+    lid = params.get("lesson");
   }
 
   if (
-    parameters.has("date") &&
-    /^\d{4}-\d{2}-\d{2}$/.test(parameters.get("date"))
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      params.get("date") || ""
+    )
   ) {
-    selectedDate = parameters.get("date");
+    selectedDate = params.get("date");
   }
+
+  attendanceView = [
+    "take",
+    "sessions",
+    "reports"
+  ].includes(params.get("view"))
+    ? params.get("view")
+    : name === "classes"
+      ? "sessions"
+      : "take";
 
   $("page-title").textContent = labels[page];
 
-  document.querySelectorAll(".tsb-nav a").forEach(link => {
-    const active = link.hash === "#" + page;
+  document.querySelectorAll(".tsb-nav a")
+    .forEach(link => {
+      const active = link.hash === "#" + page;
 
-    link.classList.toggle("active", active);
+      link.classList.toggle("active", active);
 
-    if (active) {
-      link.setAttribute("aria-current", "page");
-    } else {
-      link.removeAttribute("aria-current");
-    }
-  });
+      if (active) {
+        link.setAttribute("aria-current", "page");
+      } else {
+        link.removeAttribute("aria-current");
+      }
+    });
 
   const pages = {
     dashboard,
     students: studentsPage,
-    marks: marksPage,
-    classes: classesPage,
     attendance: attendancePage,
-    "my-attendance": myAttendance,
+    marks: marksPage,
     notices: noticesPage,
+    "my-attendance": myAttendance,
     profile: profilePage
   };
 
   $("content").innerHTML = pages[page]();
   $("content").hidden = false;
-
-  identity();
   $("page-search").value = "";
 
+  identity();
   connect();
+  tick();
 
   if (busy) lock(true);
-
-  tick();
 }
 
 function connect() {
-  document.querySelectorAll("[data-class]").forEach(element => {
-    element.addEventListener("change", () => {
+  document.querySelectorAll("[data-class]")
+    .forEach(el => {
+      el.addEventListener("change", () => {
+        if (busy) return;
+
+        cid = el.value;
+        lid = "";
+
+        location.hash = url(
+          page,
+          cid,
+          "",
+          selectedDate,
+          page === "attendance" ? attendanceView : ""
+        );
+
+        render();
+      });
+    });
+
+  $("attendance-date")?.addEventListener(
+    "change",
+    event => {
       if (busy) return;
 
-      cid = element.value;
+      selectedDate =
+        event.target.value || state.today;
+
       lid = "";
 
-      location.hash = url(page, cid);
+      location.hash = url(
+        "attendance",
+        cid,
+        "",
+        selectedDate
+      );
+
       render();
-    });
-  });
+    }
+  );
 
-  $("attendance-date")?.addEventListener("change", event => {
-    if (busy) return;
+  $("lesson-select")?.addEventListener(
+    "change",
+    event => {
+      if (busy) return;
 
-    selectedDate = event.target.value || state.today;
-    lid = "";
+      lid = event.target.value;
 
-    location.hash = url(
-      "attendance",
-      cid,
-      "",
-      selectedDate
-    );
+      location.hash = url(
+        "attendance",
+        cid,
+        lid,
+        selectedDate
+      );
 
-    render();
-  });
+      render();
+    }
+  );
 
-  $("lesson-select")?.addEventListener("change", event => {
-    if (busy) return;
-
-    lid = event.target.value;
-
-    location.hash = url(
-      "attendance",
-      cid,
-      lid,
-      selectedDate
-    );
-
-    render();
-  });
-
-  const audience = $("tn-audience");
-
-  if (audience) {
-    audience.addEventListener("change", () => {
+  $("tn-audience")?.addEventListener(
+    "change",
+    event => {
       $("tn-class-field").hidden =
-        audience.value !== "class";
+        event.target.value !== "class";
 
       $("tn-student-field").hidden =
-        audience.value !== "students";
+        event.target.value !== "students";
 
-      const select = $("tn-class-field").querySelector("select");
-      select.required = audience.value === "class";
-    });
-  }
+      $("tn-class-field")
+        .querySelector("select").required =
+          event.target.value === "class";
+    }
+  );
 }
 
-$("content").addEventListener("submit", async event => {
-  event.preventDefault();
+$("content").addEventListener("input", event => {
+  const form = event.target.form;
 
-  if (busy) return;
+  if (form?.dataset.kind === "marks") {
+    marksDrafts.set(
+      JSON.stringify([cid, form.dataset.student]),
+      Object.fromEntries(new FormData(form))
+    );
+  }
+});
 
-  const form = event.target;
-  const data = Object.fromEntries(new FormData(form));
-  const kind = form.dataset.kind;
+$("content").addEventListener("change", event => {
+  const form = event.target.form;
 
-  if (kind === "password") {
-    if (
-      data.new_password.length < 8 ||
-      data.new_password.length > 128 ||
-      data.new_password !== data.confirm_password
-    ) {
-      show(
-        "Use matching new passwords of 8–128 characters.",
-        true
+  if (form?.dataset.kind === "attendance") {
+    attendanceDrafts.set(
+      JSON.stringify([lid, form.dataset.student]),
+      event.target.value
+    );
+  }
+});
+
+$("content").addEventListener(
+  "submit",
+  async event => {
+    event.preventDefault();
+
+    if (busy) return;
+
+    const form = event.target;
+    const data = Object.fromEntries(new FormData(form));
+    const kind = form.dataset.kind;
+
+    if (kind === "attendance") {
+      await save(
+        "/classes/" + encodeURIComponent(cid) + "/attendance",
+        {
+          ...data,
+          student_id: form.dataset.student,
+          lesson_id: lid
+        }
       );
       return;
     }
 
-    lock(true);
-    show("Checking current password…");
+    if (kind === "marks") {
+      const key = JSON.stringify([
+        cid,
+        form.dataset.student
+      ]);
 
-    let changed = false;
-
-    try {
-      await request("", undefined, true);
-
-      const user = auth.currentUser;
-
-      await reauthenticateWithCredential(
-        user,
-        EmailAuthProvider.credential(
-          user.email,
-          data.current_password
-        )
+      await save(
+        "/classes/" + encodeURIComponent(cid) + "/marks",
+        {
+          ...data,
+          student_id: form.dataset.student
+        },
+        () => marksDrafts.delete(key)
       );
-
-      await updatePassword(user, data.new_password);
-
-      changed = true;
-      form.reset();
-
-      await signOut(auth);
-
-      location.replace("/login.html?role=teacher");
-    } catch (error) {
-      show(
-        changed
-          ? "Password changed. Log out, then sign in with the new password."
-          : [
-              "auth/invalid-credential",
-              "auth/wrong-password"
-            ].includes(error.code)
-            ? "Current password is incorrect."
-            : error.message,
-        !changed
-      );
-    } finally {
-      lock(false);
+      return;
     }
 
-    return;
-  }
+    if (kind === "lesson") {
+      data.request_id = reqid("lesson-" + cid);
 
-  if (kind === "profile") {
-    delete data.email;
-    await save("", data, () => {}, true);
-    return;
-  }
+      await save(
+        "/classes/" + encodeURIComponent(cid) + "/lessons",
+        data,
+        result => {
+          clearid("lesson-" + cid);
 
-  if (kind === "marks") {
-    data.student_id = form.dataset.student;
+          lid = result.id;
+          selectedDate = data.lesson_date;
 
-    await save(
-      "/classes/" + encodeURIComponent(cid) + "/marks",
-      data
-    );
-    return;
-  }
-
-  if (kind === "attendance") {
-    data.student_id = form.dataset.student;
-    data.lesson_id = lid;
-
-    await save(
-      "/classes/" + encodeURIComponent(cid) + "/attendance",
-      data
-    );
-    return;
-  }
-
-  if (kind === "lesson") {
-    data.request_id = reqid("lesson-" + cid);
-
-    await save(
-      "/classes/" + encodeURIComponent(cid) + "/lessons",
-      data,
-      result => {
-        clearid("lesson-" + cid);
-        lid = result.id;
-        selectedDate = data.lesson_date;
-
-        if (page === "attendance") {
           location.hash = url(
             "attendance",
             cid,
@@ -2417,62 +2412,130 @@ $("content").addEventListener("submit", async event => {
             selectedDate
           );
         }
+      );
+      return;
+    }
+
+    if (kind === "notice") {
+      data.request_id = reqid("notice");
+
+      data.student_ids =
+        new FormData(form).getAll("student_ids");
+
+      data.also_admin =
+        form.elements.also_admin.checked;
+
+      await save(
+        "/notices",
+        data,
+        () => clearid("notice")
+      );
+      return;
+    }
+
+    if (kind === "profile") {
+      delete data.email;
+      await save("", data, () => {}, true);
+      return;
+    }
+
+    if (kind === "password") {
+      if (
+        data.new_password.length < 8 ||
+        data.new_password.length > 128 ||
+        data.new_password !== data.confirm_password
+      ) {
+        show(
+          "Use matching new passwords of 8–128 characters.",
+          true
+        );
+        return;
       }
-    );
-    return;
+
+      lock(true);
+      show("Checking current password…");
+
+      let changed = false;
+
+      try {
+        await request("", undefined, true);
+
+        const user = auth.currentUser;
+
+        await reauthenticateWithCredential(
+          user,
+          EmailAuthProvider.credential(
+            user.email,
+            data.current_password
+          )
+        );
+
+        await updatePassword(user, data.new_password);
+
+        changed = true;
+        form.reset();
+
+        await signOut(auth);
+
+        location.replace("/login.html?role=teacher");
+      } catch (error) {
+        show(
+          changed
+            ? "Password changed. Sign in again with the new password."
+            : [
+                "auth/invalid-credential",
+                "auth/wrong-password"
+              ].includes(error.code)
+              ? "Current password is incorrect."
+              : error.message,
+          true
+        );
+      } finally {
+        lock(false);
+      }
+    }
   }
+);
 
-  if (kind === "notice") {
-    data.request_id = reqid("notice");
+$("content").addEventListener(
+  "click",
+  async event => {
+    const button = event.target.closest("[data-action]");
 
-    data.student_ids = new FormData(form)
-      .getAll("student_ids");
+    if (!button || busy) return;
 
-    data.also_admin = form.elements.also_admin.checked;
-
-    await save("/notices", data, () => {
-      clearid("notice");
-    });
+    if (
+      ["check-in", "check-out"]
+        .includes(button.dataset.action)
+    ) {
+      await save("/work-attendance", {
+        action:
+          button.dataset.action === "check-in"
+            ? "in"
+            : "out"
+      });
+    }
   }
-});
+);
 
-$("content").addEventListener("click", async event => {
-  const button = event.target.closest("[data-action]");
+$("page-search").addEventListener(
+  "input",
+  event => {
+    const terms = event.target.value
+      .normalize("NFKC")
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
 
-  if (!button || busy) return;
-
-  const action = button.dataset.action;
-
-  if (action === "check-in" || action === "check-out") {
-    await save("/work-attendance", {
-      action: action === "check-in" ? "in" : "out"
-    });
-    return;
+    document.querySelectorAll("[data-search]")
+      .forEach(row => {
+        row.hidden = !terms.every(
+          term => row.dataset.search.includes(term)
+        );
+      });
   }
-
-  if (action === "month-prev") month--;
-  if (action === "month-next") month++;
-  if (action === "month-today") month = 0;
-  if (action === "class-prev") classPage--;
-  if (action === "class-next") classPage++;
-
-  render();
-});
-
-$("page-search").addEventListener("input", event => {
-  const terms = event.target.value
-    .normalize("NFKC")
-    .toLowerCase()
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  document.querySelectorAll("[data-search]").forEach(row => {
-    row.hidden = !terms.every(term =>
-      row.dataset.search.includes(term)
-    );
-  });
-});
+);
 
 $("refresh").addEventListener("click", async () => {
   if (busy) return;
@@ -2490,26 +2553,30 @@ $("refresh").addEventListener("click", async () => {
   }
 });
 
-$("retry").addEventListener("click", () => {
-  location.reload();
-});
+$("retry").addEventListener(
+  "click",
+  () => location.reload()
+);
 
-$("logout").addEventListener("submit", async event => {
-  event.preventDefault();
+$("logout").addEventListener(
+  "submit",
+  async event => {
+    event.preventDefault();
 
-  if (busy) return;
+    if (busy) return;
 
-  lock(true);
+    lock(true);
 
-  try {
-    await signOut(auth);
-    location.replace("/login.html?role=teacher");
-  } catch (error) {
-    show(error.message, true);
-  } finally {
-    lock(false);
+    try {
+      await signOut(auth);
+      location.replace("/login.html?role=teacher");
+    } catch (error) {
+      show(error.message, true);
+    } finally {
+      lock(false);
+    }
   }
-});
+);
 
 window.addEventListener("hashchange", () => {
   if (!busy) render();
@@ -2518,42 +2585,43 @@ window.addEventListener("hashchange", () => {
 function tick() {
   const now = new Date();
 
-  const options = {
-    timeZone: "Asia/Shanghai"
-  };
-
   $("live-date").textContent =
     new Intl.DateTimeFormat("en-GB", {
-      ...options,
-      weekday: "long",
+      timeZone: "Asia/Shanghai",
+      weekday: "short",
       day: "numeric",
-      month: "long",
+      month: "short",
       year: "numeric"
     }).format(now);
 
-  const currentTime =
+  $("live-time").textContent =
     new Intl.DateTimeFormat("en-GB", {
-      ...options,
+      timeZone: "Asia/Shanghai",
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit"
+      hourCycle: "h23"
     }).format(now);
-
-  $("live-time").textContent = currentTime;
-
-  if ($("dashboard-clock")) {
-    $("dashboard-clock").textContent = currentTime;
-  }
 }
 
 tick();
 setInterval(tick, 1000);
 
 onAuthStateChanged(auth, async user => {
-  const currentVersion = ++version;
+  const current = ++version;
 
   state = null;
   $("content").hidden = true;
+
+  if (activeUid !== user?.uid) {
+    attendanceDrafts.clear();
+    marksDrafts.clear();
+
+    cid = "";
+    lid = "";
+    selectedDate = "";
+
+    activeUid = user?.uid || "";
+  }
 
   if (!user) {
     location.replace("/login.html?role=teacher");
@@ -2561,23 +2629,23 @@ onAuthStateChanged(auth, async user => {
   }
 
   lock(true);
-  show("Checking Teacher account and loading data…");
+  show("Loading your workspace…");
 
   try {
     await refresh();
 
-    if (currentVersion !== version) return;
+    if (current !== version) return;
 
     render();
     show("");
     $("retry").hidden = true;
   } catch (error) {
-    if (currentVersion === version) {
+    if (current === version) {
       show(error.message, true);
       $("retry").hidden = false;
     }
   } finally {
-    if (currentVersion === version) {
+    if (current === version) {
       lock(false);
     }
   }
